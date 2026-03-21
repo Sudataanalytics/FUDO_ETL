@@ -2,7 +2,7 @@
 steps:
 # Build the Docker image
 - name: 'gcr.io/cloud-builders/docker' # Esta imagen 'docker' sí está en GCR y funciona.
-  args: ['build', '-t', 'us-central1-docker.pkg.dev/${PROJECT_ID}/ginesta-fudo-etl-repo/ginesta-fudo-etl:${_TAG_NAME}', '-f', 'fudo_etl/Dockerfile', 'fudo_etl']
+  args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest', '.']
   id: Build
 
 # Push the Docker image to Artifact Registry
