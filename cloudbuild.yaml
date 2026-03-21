@@ -21,6 +21,8 @@ steps:
       - '--set-env-vars=CLIENT_NAME=miguitas,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
       - '--set-secrets=DB_CONNECTION_STRING=D-002-MIGUITAS-DB-CONN:latest'
       - '--region=southamerica-east1'
+      - '--task-timeout=3600'
+      - '--memory=2Gi'
     id: 'Deploy-Miguitas'
 
   # 4. Desplegar/Actualizar Job de d-003-amoremio
@@ -35,6 +37,8 @@ steps:
       - '--set-env-vars=CLIENT_NAME=amoremio,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
       - '--set-secrets=DB_CONNECTION_STRING=D-003-AMOREMIO-DB-CONN:latest'
       - '--region=southamerica-east1'
+      - '--task-timeout=3600'
+      - '--memory=2Gi'
     id: 'Deploy-Amoremio'
 
 images:
