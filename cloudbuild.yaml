@@ -18,8 +18,8 @@ steps:
       - 'deploy'
       - 'd-002-miguitas'
       - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
-      - '--set-env-vars=CLIENT_NAME=miguitas,GCP_PROJECT_ID=$PROJECT_ID'
-      - '--set-secrets=DB_CONNECTION_STRING=D-002-MIGUITAS-DB-CONN:latest,FUDO_AUTH_ENDPOINT=FUDO_AUTH_ENDPOINT:latest,FUDO_API_BASE_URL=FUDO_API_BASE_URL:latest'
+      - '--set-env-vars=CLIENT_NAME=miguitas,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
+      - '--set-secrets=DB_CONNECTION_STRING=D-002-MIGUITAS-DB-CONN:latest'
       - '--region=southamerica-east1'
     id: 'Deploy-Miguitas'
 
@@ -32,8 +32,8 @@ steps:
       - 'deploy'
       - 'd-003-amoremio'
       - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
-      - '--set-env-vars=CLIENT_NAME=amoremio,GCP_PROJECT_ID=$PROJECT_ID'
-      - '--set-secrets=DB_CONNECTION_STRING=D-003-AMOREMIO-DB-CONN:latest,FUDO_AUTH_ENDPOINT=FUDO_AUTH_ENDPOINT:latest,FUDO_API_BASE_URL=FUDO_API_BASE_URL:latest'
+      - '--set-env-vars=CLIENT_NAME=amoremio,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
+      - '--set-secrets=DB_CONNECTION_STRING=D-003-AMOREMIO-DB-CONN:latest'
       - '--region=southamerica-east1'
     id: 'Deploy-Amoremio'
 
