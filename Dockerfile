@@ -14,7 +14,7 @@ WORKDIR /app
 COPY fudo_etl/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos todo el contenido del proyecto
+# Copiamos todo el contenido del proyecto.
 COPY . .
 
 # Configuramos el PYTHONPATH para que Python encuentre la carpeta 'clients'
