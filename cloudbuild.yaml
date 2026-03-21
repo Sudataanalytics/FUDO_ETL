@@ -1,50 +1,40 @@
-# cloudbuild.yaml (en la raíz de 'FUDO')
 steps:
   # 1. Construir la imagen Docker genérica
-  # Se guarda en el repositorio genérico 'fudo-etl-repo'
   - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'build', 
-      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest', 
-      '.'
-    ]
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest', '.']
     id: 'Build'
 
   # 2. Subir la imagen al Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: [
-      'push', 
-      'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
-    ]
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest']
     id: 'Push'
 
-  # 3. Actualizar el Job de MIGUITAS (D-002)
-  # Usamos 'update' para que solo cambie la imagen y mantenga el resto igual
+  # 3. Desplegar/Actualizar Job de d-002-miguitas
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
       - 'jobs'
-      - 'update'
-      - 'D-002-miguitas'
+      - 'deploy'
+      - 'd-002-miguitas'
       - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
       - '--set-env-vars=CLIENT_NAME=miguitas,GCP_PROJECT_ID=$PROJECT_ID'
       - '--set-secrets=DB_CONNECTION_STRING=D-002-MIGUITAS-DB-CONN:latest,FUDO_AUTH_ENDPOINT=FUDO_AUTH_ENDPOINT:latest,FUDO_API_BASE_URL=FUDO_API_BASE_URL:latest'
-      - '--region=us-central1'
+      - '--region=southamerica-east1'
     id: 'Deploy-Miguitas'
 
-  # 4. Actualizar el Job de AMOREMIO (D-003)
+  # 4. Desplegar/Actualizar Job de d-003-amoremio
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       - 'run'
       - 'jobs'
-      - 'update'
-      - 'D-003-amoremio'
+      - 'deploy'
+      - 'd-003-amoremio'
       - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
       - '--set-env-vars=CLIENT_NAME=amoremio,GCP_PROJECT_ID=$PROJECT_ID'
       - '--set-secrets=DB_CONNECTION_STRING=D-003-AMOREMIO-DB-CONN:latest,FUDO_AUTH_ENDPOINT=FUDO_AUTH_ENDPOINT:latest,FUDO_API_BASE_URL=FUDO_API_BASE_URL:latest'
-      - '--region=us-central1'
+      - '--region=southamerica-east1'
     id: 'Deploy-Amoremio'
 
 images:
