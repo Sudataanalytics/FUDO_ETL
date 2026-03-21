@@ -1,156 +1,87 @@
-# Proyecto ETL para Grupo Ginesta (Datos Gastronómicos Fudo)
-
-Este repositorio contiene la solución de Extracción, Transformación y Carga (ETL) desarrollada para Grupo Ginesta, con el objetivo de centralizar y procesar los datos de sus unidades gastronómicas que utilizan el sistema **Fu.do**.
-
-La solución extrae datos crudos de la API de Fu.do, los almacena en una base de datos PostgreSQL, los transforma en un modelo relacional optimizado (DER), y automatiza su actualización para el consumo de Power BI.
-
----
-
-## 🚀 **Visión General de la Solución**
-
-El ETL procesa datos de ventas, ítems de venta, pagos, productos, categorías y sucursales de Fu.do para todas las unidades gastronómicas (Nebraska, Quito, Punto Criollo, Chalé).
-
-**Componentes Clave:**
-- **Origen de Datos:** Fu.do API (múltiples sucursales).
-- **Base de Datos de Destino:** PostgreSQL en Donweb (`ginesta` DB).
-- **Capas de Datos:**
-    - **RAW Layer:** Tablas `fudo_raw_*` (datos crudos, optimizados para cambios de contenido).
-    - **Analytic Layer (DER):** Vistas Materializadas `mv_*` (modelo relacional optimizado para Power BI).
-- **Orquestación:** Python script (`main.py`) dockerizado.
-- **Plataforma Cloud:** Google Cloud Platform (GCP) - Cloud Run Jobs, Cloud Scheduler, Secret Manager.
-- **Consumo:** Microsoft Power BI (via Power BI Gateway a Donweb).
-
----
-
-## 🏗️ **Estructura del Proyecto**
-grupo ginesta/
-├── .github/
-│ └── workflows/ # GitHub Actions (futuro CI/CD)
-├── .gitignore # Archivos ignorados por Git
-├── fudo_etl/ # Contenedor del ETL de Fu.do
-│ ├── modules/ # Módulos Python internos (config, db, auth, api_client, metadata)
-│ │ ├── init.py
-│ │ └── ...
-│ ├── sql/ # Scripts SQL para despliegue de estructura
-│ │ └── deploy_fudo_structure.sql
-│ ├── main.py # Script principal del ETL (Extract, Load, Transform)
-│ ├── deploy_db.py # Script para la creación inicial de la DB en Donweb
-│ ├── Dockerfile # Definición de la imagen Docker para el ETL
-│ └── requirements.txt # Dependencias de Python
-├── brie-etl/ # Futura integración para Minimercados Brie (estructura similar)
-│ └── ...
-├── venv/ # Entorno virtual (ignorada)
-├── .env # Variables de entorno locales (ignorada - ¡CRÍTICO!)
-└── README.md # Este documento
+🚀 Solución ETL Multicliente Fu.do (Grupo Ginesta & Sudata)
+Este repositorio contiene la infraestructura Genérica y Dockerizada de Extracción, Transformación y Carga (ETL) diseñada para centralizar datos de múltiples clientes que utilizan el sistema gastronómico Fu.do.
+Actualmente, el sistema gestiona de forma independiente a:
+D-002-Miguitas (3 sucursales)
+D-003-Amoremio (9 sucursales)
+🏗️ Arquitectura Genérica (Mono-Repo)
+La solución separa el Core del ETL (lógica de extracción y carga) de la Configuración por Cliente (reglas de negocio y sucursales), permitiendo escalar a nuevos clientes en minutos.
+Componentes Clave:
+Core Genérico (fudo_etl/): Código Python único que maneja la conexión a la API de Fudo y la persistencia en PostgreSQL.
+Capa de Clientes (clients/): Archivos SQL y Python específicos que definen las sucursales y el modelo analítico de cada cliente.
+Estrategia de Carga:
+Full Refresh: Para asegurar la integridad (especialmente en estados de ventas e ítems), se realiza un truncado y carga completa de las tablas RAW principales en cada ejecución.
+Claves Sintéticas: Los IDs se gestionan como ID_FUDO-ID_SUCURSAL (tipo TEXT) para evitar colisiones entre sucursales.
+Infraestructura: Google Cloud Platform (Proyecto: dashestandar).
+📁 Estructura del Proyecto
 code
-Code
----
+Text
+FUDO/
+├── fudo_etl/                # CORE GENÉRICO (No tocar para nuevos clientes)
+│   ├── modules/             # Lógica de API, DB y Auth
+│   ├── sql/
+│   │   ├── base_raw_tables_and_metadata.sql  # Tablas fudo_raw_* comunes
+│   │   └── initial_grants.sql               # Permisos de DB
+│   └── main.py              # Orquestador dinámico
+├── clients/                 # CONFIGURACIÓN POR CLIENTE
+│   ├── miguitas/
+│   │   ├── branches.sql            # Sucursales y Credenciales
+│   │   ├── der_tables_ddl.sql      # Tablas lógicas del DER
+│   │   └── analytical_layer_mvs.py  # Vistas Materializadas (Gold)
+│   └── amoremio/            # (Misma estructura que miguitas)
+├── Dockerfile               # Empaquetado genérico
+├── cloudbuild.yaml          # Automatización de despliegue en GCP
+├── requirements.txt         # Dependencias Python
+└── .env                     # Variables locales (IGNORADO POR GIT)
+⚙️ Configuración y Despliegue (Equipo Técnico)
+1. Preparación Local
+Entorno Virtual: python -m venv venv -> .\venv\Scripts\activate
+Dependencias: pip install -r fudo_etl/requirements.txt
+Producción: En fudo_etl/modules/fudo_api_client.py, asegúrese de que max_pages sea -1.
+2. Automatización en GCP
+Cada git push a la rama main dispara Cloud Build, el cual:
+Construye la imagen Docker genérica.
+Actualiza los Cloud Run Jobs: d-002-miguitas y d-003-amoremio.
 
-## ⚙️ **Configuración y Despliegue**
 
-### **1. Entorno de Desarrollo Local**
+📘 Manual de Replicación: Agregar un Nuevo Cliente
+(Diseñado para equipo no técnico de Sudata)
+Para agregar un cliente nuevo (ejemplo: D-004-Pepito), siga estos pasos:
 
-Para ejecutar el ETL localmente (contra tu PostgreSQL local o Donweb para pruebas):
+Paso 1: Base de Datos (Donweb)
+Ingrese a pgAdmin y conéctese al servidor de Donweb.
+Cree una base de datos vacía llamada exactamente D-004-pepito.
 
-1.  **Clonar el Repositorio:**
-    git clone https://github.com/Sudataanalytics/ginesta.git
-    cd ginesta
+Paso 2: Configuración en GitHub
+En la carpeta clients/, cree una carpeta llamada pepito/.
+Copie los archivos branches.sql, der_tables_ddl.sql y analytical_layer_mvs.py de la carpeta miguitas/.
+Edite branches.sql: Reemplace los nombres e IDs por las credenciales de Fudo del nuevo cliente.
 
-2.  **Crear y Activar Entorno Virtual:**
-    python3 -m venv venv
-    source venv/bin/activate  # macOS/Linux
- 
-3.  **Instalar Dependencias:**
-    
-    pip install -r fudo_etl/requirements.txt
+Paso 3: Secretos en GCP (Secret Manager)
+Ingrese a Google Cloud (Proyecto dashestandar) -> Secret Manager.
+Cree el secreto D-004-PEPITO-DB-CONN con el valor: postgresql://sudata_owner:6w3zAQa4sXs6z@vps-4657831-x.dattaweb.com:5432/D-004-pepito.
+Cree los secretos para cada sucursal siguiendo el formato: FUDO_PEPITO_SUCURSAL_APIKEY y FUDO_PEPITO_SUCURSAL_APISECRET.
+Permisos: Asegúrese de que la cuenta de servicio 481795797888-compute@developer... tenga el rol de Secret Manager Secret Accessor en estos nuevos secretos.
 
-4.  **Configurar `.env`:**
-    Crea un archivo `.env` en la **raíz del proyecto** (`grupo ginesta/`) con las credenciales (¡no lo subas a Git!):
-    ```
-    DB_CONNECTION_STRING="postgresql://fudo_user:mysecretpassword@localhost:5432/fudo_etl_db"
-    DONWEB_ADMIN_CONNECTION_STRING="postgresql://sudata_owner:6w3zAQa4sXs6z@vps-4657831-x.dattaweb.com:5432/postgres"
-    TARGET_DATABASE_NAME="ginesta" # O el nombre de tu DB local para pruebas
-    FUDO_AUTH_ENDPOINT="https://auth.fu.do/api"
-    FUDO_API_BASE_URL="https://api.fu.do"
-    GCP_PROJECT_ID="local-dev-project" # ID de tu proyecto GCP, o dummy para local
+Paso 4: Actualizar Despliegue
+Abra el archivo cloudbuild.yaml.
+Copie el bloque de Amoremio (Step 4) y péguelo abajo.
+Cambie d-003-amoremio por d-004-pepito y el secreto de la base de datos.
+Haga Push a GitHub.
 
-    # Credenciales de Fu.do (todas las sucursales)
-    FUDO_CHALE_APIKEY="MUAxNTk0MzM="
-    FUDO_CHALE_APISECRET="oHxOKeifSqdOMt6nICBuOJHsBq4ZfBsA"
-    FUDO_QUITO_BAR_APIKEY="..."
-    FUDO_QUITO_BAR_APISECRET="..."
-    FUDO_NEBRASKA_SAS_APIKEY="..."
-    FUDO_NEBRASKA_SAS_APISECRET="..."
-    FUDO_PUNTO_CRIOLLO_APIKEY="..."
-    FUDO_PUNTO_CRIOLLO_APISECRET="..."
-    ```
-5.  **Preparar Base de Datos PostgreSQL (Local o Donweb):**
-    *   **Local:** Asegúrate de tener PostgreSQL ejecutándose y una DB `fudo_etl_db` con el usuario `fudo_user`.
-    *   **Donweb:** Si apuntas a Donweb, asegúrate de que la DB `ginesta` exista y que tu IP local esté en el firewall.
+Paso 5: Programación
+En Cloud Run, cree el Job inicial d-004-pepito con la variable CLIENT_NAME=pepito.
+En Cloud Scheduler, cree una tarea para que el Job corra cada 2 horas (Frecuencia: 0 8-23/2 * * *).
 
-### **2. Ejecución Local del ETL**
 
-**Para crear la DB `ginesta` en Donweb (¡SOLO UNA VEZ!):**
-(Asegúrate de que `DONWEB_ADMIN_CONNECTION_STRING` en `.env` apunte a la DB `postgres` de Donweb).
-```bash
-python -m fudo_etl.deploy_db
-Para desplegar la estructura de tablas/vistas en la DB ginesta (¡SOLO UNA VEZ por DB!):
-(Asegúrate de que DB_CONNECTION_STRING en .env apunte a la DB ginesta de Donweb o tu DB local).
-code
-Bash
-python -m fudo_etl.main # Esto ejecutará la fase de despliegue y luego la ETL RAW/Transformación
-Para ejecuciones regulares (Extracción y Transformación):
-(Asegúrate de que DB_CONNECTION_STRING en .env apunte a la DB ginesta de Donweb o tu DB local).
-code
-Bash
-# Comentar la sección de despliegue de estructura en fudo_etl/main.py
-# Y luego ejecutar:
-python -m fudo_etl.main
-☁️ Despliegue en Google Cloud Platform (GCP)
-1. Configuración de GCP
-Proyecto: ginestafudo
-Región: us-central1 (para Cloud Run Jobs, Artifact Registry, Cloud Scheduler).
-Habilitar APIs:
-Cloud Build API, Cloud Run API, Secret Manager API, Cloud Scheduler API, Artifact Registry API, Cloud Storage API, IAM API.
-Crear Secretos en Secret Manager:
-Crea un secreto para cada variable mapeada en fudo_etl/cloudbuild.yaml (--set-secrets). Los nombres de los secretos deben ser exactos (ej. fudo-chale-apikey, donweb-db-connection-string, gcp-project-id con valor ginestafudo).
-Configurar Repositorio de Artifact Registry:
-Crea un repositorio Docker llamado ginesta-fudo-etl-repo en la región us-central1.
-Configurar Permisos de Cuentas de Servicio:
-Cloud Build Service Account ([PROJECT_NUMBER]-compute@developer.gserviceaccount.com):
-Administrador de Cloud Run
-Usuario de cuenta de servicio
-Accesor de secretos de Secret Manager
-Escritor de Artifact Registry
-Escritor de registros (Logs Writer)
-Lector de imágenes de Container Registry (si aún hubiera necesidad de leer de gcr.io)
-Cloud Run Job Service Account (la misma que Cloud Build en este proyecto):
-Accesor de secretos de Secret Manager
-Invocador de Cloud Run (Este se añade a la SA que dispara el Scheduler, pero si el Job se invoca a sí mismo o se usa esta SA, también lo necesita).
-2. Disparador de Cloud Build (CI/CD)
-Configurar Disparador:
-En Cloud Build > Disparadores, crea/edita el disparador ginesta-fudo-etl-deployment-trigger.
-Repositorio: Sudataanalytics/ginesta (GitHub).
-Rama: main.
-Archivo de configuración de Cloud Build: fudo_etl/cloudbuild.yaml (¡ruta correcta dentro del repo!).
-Cuenta de Servicio: 595327888136-compute@developer.gserviceaccount.com (la que configuraste con todos los permisos).
-Ejecutar Disparador:
-Haz un git push a main, o ejecuta manualmente el disparador para desplegar el ginesta-fudo-etl-job.
-3. Programación con Cloud Scheduler
-Crear Tarea:
-En Cloud Scheduler, crea la tarea ginesta-fudo-etl-scheduler.
-Región: us-central1.
-Frecuencia: 0 8-23/2 * * * (Cada 2 horas, de 8 AM a 11 PM).
-Zona Horaria: America/Argentina/Buenos_Aires.
-Objetivo: Cloud Run.
-Servicio de Cloud Run: Selecciona ginesta-fudo-etl-job (y su región us-central1).
-Autenticación: OIDC token con la cuenta de servicio 595327888136-compute@developer.gserviceaccount.com (o la que tenga Cloud Run Invoker).
-✅ Validación Final
-Ejecutar Cloud Run Job Manualmente: Desde Cloud Run > Trabajos, haz clic en ginesta-fudo-etl-job y luego en "Ejecutar".
-Monitorear Logs: En Cloud Logging, filtra por Resource: Cloud Run Job, ginesta-fudo-etl-job. Verifica que el ETL se ejecute de principio a fin sin errores.
-Verificar DB en Donweb: Con pgAdmin, conecta a ginesta y verifica las tablas fudo_raw_* y mv_* para confirmar que los datos se están actualizando.
+
 📊 Integración con Power BI
-Una vez que el ETL esté operando en GCP y actualizando Donweb:
-Configurar Power BI Gateway: En un servidor de la empresa, instala y configura el On-premises Data Gateway. Crea una fuente de datos PostgreSQL que apunte a vps-4657831-x.dattaweb.com:5432/ginesta con las credenciales de sudata_owner.
-Publicar .pbix: La BA publicará el GrupoGinesta_Gastronomia_Dashboard_V1.pbix en Power BI Service.
-Configurar Actualización Programada: En Power BI Service, en la configuración del conjunto de datos, asocia la fuente de datos con el Gateway y configura la actualización cada 2 horas (coincidiendo con el Scheduler).
+Conexión: Use el On-premises Data Gateway conectado a la base de datos de Donweb del cliente.
+Tablas Clave:
+mv_sales_order: Cabecera de ventas (Usar order_key).
+mv_sales_order_line: Detalle de ventas (Usar price_unit corregido para evitar picos).
+mv_pagos: Flujo de caja (Usar signed_amount para neto de ingresos/gastos y transaction_type para filtrar).
+mv_providers: Maestro de proveedores (Nuevo).
+Mantenimiento: El modelo analítico utiliza claves tipo TEXT. Asegúrese de que las relaciones en Power BI usen los campos _key o _key_fk.
+Soporte y Contacto
+Desarrollado por el equipo de Ingeniería de Datos de Sudata Analytics.
+Dudas técnicas: devops@sudata.co

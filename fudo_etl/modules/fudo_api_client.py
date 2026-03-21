@@ -89,7 +89,7 @@ class FudoApiClient:
                 id_sucursal=id_sucursal,
                 apply_incremental_filter=False, # ¡NO APLICAR FILTRO DE FECHA!
                 start_page=1,
-                max_pages=1, # <--- ⚠️ ATENCIÓN: PUESTO EN 1 PARA TU PRUEBA RÁPIDA. CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
+                max_pages=-1, # <--- ⚠️ ATENCIÓN: PUESTO EN 1 PARA TU PRUEBA RÁPIDA. CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
                 filter_params=None
             )
             logger.info(f"  Total de '{entity_name}' extraídas (carga completa): {len(all_items)}")
@@ -114,7 +114,7 @@ class FudoApiClient:
                 fields_key=self.fields_key_mapping.get(entity_name),
                 fields_params=self.fields_parameters.get(self.fields_key_mapping.get(entity_name)),
                 start_page=1,
-                max_pages=1 # <--- ⚠️ ATENCIÓN: PUESTO EN 1 PARA TU PRUEBA RÁPIDA. CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
+                max_pages=-1 # <--- ⚠️ ATENCIÓN: PUESTO EN 1 PARA TU PRUEBA RÁPIDA. CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
             )
 
     # --- MÉTODO AUXILIAR que encapsula la lógica de paginación y reintentos ---
