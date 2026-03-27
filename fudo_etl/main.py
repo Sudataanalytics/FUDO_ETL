@@ -99,147 +99,99 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
                       materialized_views_configs: list[tuple[str, str]],
                       raw_views_configs: list[tuple[str, str]]):
     logger.info("==================================================")
-    logger.info(f"  Iniciando proceso ETL RAW de Fudo para cliente '{client_name}' - EXTRACT & LOAD")
+    logger.info(f"  Iniciando proceso ETL RAW para cliente '{client_name}'")
     logger.info("==================================================")
     
     try:
         config = load_config()
         project_id = config.get("gcp_project_id")
-
         metadata_manager = ETLMetadataManager(db_manager)
         authenticator = FudoAuthenticator(db_manager, config['fudo_auth_endpoint'], project_id)
         api_client = FudoApiClient(config['fudo_api_base_url'])
 
-        logger.info("Obteniendo lista de sucursales activas de la base de datos...")
         branches_config = db_manager.fetch_all(
             "SELECT id_sucursal, fudo_branch_identifier, sucursal_name, "
             "secret_manager_apikey_name, secret_manager_apisecret_name "
             "FROM public.config_fudo_branches WHERE is_active = TRUE"
         )
         if not branches_config:
-            logger.warning(f"No se encontraron sucursales activas para '{client_name}' en config_fudo_branches. Finalizando.")
+            logger.warning(f"No se encontraron sucursales activas para '{client_name}'.")
             return 
 
         entities_to_extract = [
             'customers', 'discounts', 'expenses', 'expense-categories', 'ingredients',
             'items', 'kitchens', 'payments', 'payment-methods', 'product-categories',
             'product-modifiers', 'products', 'roles', 'rooms', 'sales', 'tables', 'users',
-            'providers' # ¡Asegúrate de que 'providers' esté aquí!
+            'providers'
         ]
+        
+        # --- LÓGICA DE ACUMULACIÓN: Rastrear qué tablas ya limpiamos en esta corrida ---
+        tablas_ya_truncadas = set()
 
         for branch_data in branches_config:
             id_sucursal_internal = branch_data[0]
-            fudo_branch_id = branch_data[1]
             branch_name = branch_data[2]
             api_key_secret_name = branch_data[3]
             api_secret_secret_name = branch_data[4]
 
-            logger.info(f"\n--- Procesando Sucursal: '{branch_name}' (ID interno: '{id_sucursal_internal}') ---")
+            logger.info(f"\n--- Procesando Sucursal: '{branch_name}' ({id_sucursal_internal}) ---")
 
             try:
-                token = authenticator.get_valid_token(
-                    id_sucursal_internal, 
-                    api_key_secret_name, 
-                    api_secret_secret_name
-                )
+                token = authenticator.get_valid_token(id_sucursal_internal, api_key_secret_name, api_secret_secret_name)
                 api_client.set_auth_token(token)
-                logger.debug(f"Token válido establecido para {id_sucursal_internal}.")
 
                 for entity in entities_to_extract:
                     raw_table_name = f"fudo_raw_{entity.replace('-', '_')}"
-
-                    logger.info(f"  Extrayendo entidad '{entity}' para sucursal '{id_sucursal_internal}'...")
                     
                     try:
-                        raw_data_records_from_api = [] # Inicializar aquí
-
-                        # --- CLASIFICACIÓN DE ENTIDADES PARA EXTRACCIÓN ---
-                        # (La lógica de Full Refresh vs Incremental está en fudo_api_client.py)
-                        raw_data_records_from_api = api_client.get_data(
-                            entity,
-                            id_sucursal_internal,
-                            # last_extracted_ts se pasa si la estrategia es incremental
-                            # (fudo_api_client.py lo determinará)
-                            last_extracted_ts = metadata_manager.get_last_extraction_timestamp(
-                                id_sucursal_internal, entity
-                            )
-                        )
+                        last_ts = metadata_manager.get_last_extraction_timestamp(id_sucursal_internal, entity)
+                        raw_data_records_from_api = api_client.get_data(entity, id_sucursal_internal, last_ts)
                         
                         if raw_data_records_from_api:
                             prepared_records_for_db = []
                             for record in raw_data_records_from_api:
-                                fudo_record_id = record.get('id', str(uuid.uuid4())) 
-
-                                last_updated_fudo = None
-                                attributes = record.get('attributes', {})
-
-                                # Lógica para determinar last_updated_fudo para cada entidad
-                                # Esta lógica es genérica y usa `createdAt` por defecto,
-                                # o `closedAt` para sales si es aplicable.
-                                if entity == 'sales':
-                                    last_updated_fudo = parse_fudo_date(attributes.get('closedAt')) or \
-                                                        parse_fudo_date(attributes.get('createdAt'))
-                                else: # Para todas las demás entidades
-                                    last_updated_fudo = parse_fudo_date(attributes.get('createdAt')) # Asumir 'createdAt' por defecto, si existe
-
                                 payload_str = json.dumps(record, sort_keys=True)
-                                payload_checksum = md5(payload_str.encode('utf-8')).hexdigest()
-
                                 prepared_records_for_db.append({
-                                    'id_fudo': fudo_record_id,
+                                    'id_fudo': record.get('id'),
                                     'id_sucursal_fuente': id_sucursal_internal,
                                     'fecha_extraccion_utc': datetime.now(timezone.utc),
                                     'payload_json': payload_str,
-                                    'last_updated_at_fudo': last_updated_fudo,
-                                    'payload_checksum': payload_checksum
+                                    'last_updated_at_fudo': parse_fudo_date(record.get('attributes', {}).get('createdAt')),
+                                    'payload_checksum': md5(payload_str.encode('utf-8')).hexdigest()
                                 })
                             
-                            # --- LÓGICA DE CARGA EN DB (TRUNCATE para Full Refresh, UPSERT para Incremental) ---
-                            # La decisión de TRUNCATE o UPSERT ahora se basa en la lista 'entities_for_full_refresh'
-                            # definida en api_client.py
+                            # --- CARGA INTELIGENTE ---
                             if entity in api_client.entities_for_full_refresh:
-                                logger.info(f"    [AUDIT] TRUNCANDO '{raw_table_name}' antes de la carga completa de '{entity}'.")
-                                db_manager.execute_query(f"TRUNCATE TABLE public.{raw_table_name} CASCADE;")
-                                db_manager.insert_raw_data(raw_table_name, prepared_records_for_db)
-                                logger.info(f"    [AUDIT] '{entity}' cargados en DB: {len(prepared_records_for_db)} registros en '{raw_table_name}' (Full Refresh).")
-                                # Para entidades Full Refresh, el last_extracted_ts solo indica cuándo se hizo el último Full Refresh
-                                metadata_manager.update_last_extraction_timestamp(
-                                    id_sucursal_internal, entity, datetime.now(timezone.utc)
-                                )
-                            else:
-                                # Lógica para tablas RAW con UPSERT incremental (Type 2 SCD)
-                                db_manager.insert_raw_data(raw_table_name, prepared_records_for_db)
-                                logger.info(f"    [AUDIT] '{entity}' cargados en DB: {len(prepared_records_for_db)} registros en '{raw_table_name}' (Incremental Upsert).")
+                                # SOLO truncamos si es la PRIMERA VEZ que esta tabla aparece en TODA la ejecución
+                                if raw_table_name not in tablas_ya_truncadas:
+                                    logger.info(f"    [AUDIT] TRUNCANDO '{raw_table_name}' (Primera sucursal detectada).")
+                                    db_manager.execute_query(f"TRUNCATE TABLE public.{raw_table_name} CASCADE;")
+                                    tablas_ya_truncadas.add(raw_table_name)
                                 
-                                metadata_manager.update_last_extraction_timestamp(
-                                    id_sucursal_internal, entity, datetime.now(timezone.utc)
-                                )
+                                # Insertamos (esto irá sumando las sucursales una debajo de otra)
+                                db_manager.insert_raw_data(raw_table_name, prepared_records_for_db)
+                                logger.info(f"    [AUDIT] '{entity}' cargados: {len(prepared_records_for_db)} (Acumulando sucursal).")
+                            else:
+                                # Incremental normal
+                                db_manager.insert_raw_data(raw_table_name, prepared_records_for_db)
+                            
+                            metadata_manager.update_last_extraction_timestamp(id_sucursal_internal, entity, datetime.now(timezone.utc))
                         else:
-                            logger.info(f"    No se extrajeron nuevos registros para '{entity}'.")
+                            logger.info(f"    No hay datos nuevos para '{entity}'.")
                     except Exception as e:
-                        logger.error(f"  Error al procesar entidad '{entity}': {e}", exc_info=True)
-                        logger.error(f"    [AUDIT] '{entity}' extracción FALLIDA para sucursal '{id_sucursal_internal}'.")
+                        logger.error(f"  Error en entidad '{entity}': {e}")
                         continue
             except Exception as e:
-                logger.error(f"Error crítico en sucursal '{branch_name}': {e}", exc_info=True)
-                logger.error(f"    [AUDIT] Sucursal '{branch_name}' procesamiento FALLIDO.")
+                logger.error(f"Fallo crítico en sucursal '{branch_name}': {e}")
                 continue
-            
             time.sleep(1)
 
-        # --- LLAMADA A LA FASE DE TRANSFORMACIÓN DESPUÉS DE LA EXTRACCIÓN RAW COMPLETA ---
-        # Ahora pasamos las configs del cliente a la función
-        refresh_analytics_materialized_views(db_manager,
-                                             materialized_views_configs, # <--- Estas listas vienen de la carga dinámica
-                                             raw_views_configs)         # <--- de client_specific_mvs_module
-        # ----------------------------------------------------------------------------------
+        # Al terminar de recorrer todas las sucursales, refrescamos las vistas
+        refresh_analytics_materialized_views(db_manager, materialized_views_configs, raw_views_configs)
 
     except Exception as e:
-        logger.critical(f"ERROR FATAL en el proceso ETL RAW principal para cliente '{client_name}': {e}", exc_info=True)
-        print(f"ERROR FATAL: {e}")
-    finally:
-        pass
-
+        logger.critical(f"ERROR FATAL: {e}", exc_info=True)
+            
 # --- FUNCIÓN PARA DESPLEGAR LA ESTRUCTURA INICIAL DE FUDO EN LA DB ---
 # Ahora deploy_fudo_database_structure también recibe el nombre del cliente
 def deploy_fudo_database_structure(db_manager: DBManager, client_name: str):
