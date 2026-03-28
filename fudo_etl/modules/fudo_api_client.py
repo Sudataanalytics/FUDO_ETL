@@ -15,22 +15,21 @@ class FudoApiClient:
         self.max_backoff_delay = 300
         self.inter_page_delay = 1.0
         
-        # --- Mapeo EXPLÍCITO: SOLO para entidades que requieren fields para traer atributos ---
+        # --- Mapeo EXPLÍCITO: SOLO para las que SÍ necesitan fields para traer datos extra ---
+        # No incluimos 'products' ni 'customers' aquí para que Fudo mande el JSON COMPLETO por defecto.
         self.fields_key_mapping = {
             'expenses': 'expense',
             'expense-categories': 'expenseCategory',
-            'providers': 'provider',
-            'products': 'product',
+            'providers': 'provider' # Nuevo campo solicitado
         }
 
         self.fields_parameters = {
             'expense': 'amount,canceled,cashRegister,createdAt,date,description,dueDate,expenseCategory,expenseItems,paymentDate,paymentMethod,provider,receiptNumber,receiptType,status,useInCashCount,user',
             'expenseCategory': 'active,financialCategory,name,parentCategory',
             'provider': 'name,email,address,phone,comment,active,internal,providerHouseAccountBalance,fiscalNumber',
-            'product': 'active,code,cost,description,enableOnlineMenu,enableQrMenu,favourite,imageUrl,name,position,price,sellAlone,stock,stockControl',
         }
 
-        # --- Entidades que siempre se descargan completas (Sin filtro de fecha) ---
+        # --- Entidades que siempre se descargan completas (Para evitar errores 400 de filtro) ---
         self.entities_for_full_refresh = [
             'sales', 'payments', 'payment-methods', 'product-categories', 
             'product-modifiers', 'products', 'customers', 'discounts', 
@@ -38,9 +37,9 @@ class FudoApiClient:
             'tables', 'users', 'providers', 'expense-categories'
         ]
 
-        # --- Entidades que soportan filtro incremental ---
+        # --- Entidades con filtro incremental ---
         self.incremental_filter_entities = {
-            'expenses': 'createdAt',
+            'sales': 'createdAt',
         }
 
     def set_auth_token(self, token: str):
@@ -48,13 +47,21 @@ class FudoApiClient:
         logger.debug("Token de autenticación establecido.")
 
     def get_data(self, entity_name: str, id_sucursal: str, last_extracted_ts: datetime = None) -> list[dict]:
+        """
+        Extrae datos de la API de Fudo.
+        Si la entidad está en 'entities_for_full_refresh', ignora el timestamp y trae todo.
+        """
+        if not self.auth_token:
+            raise ValueError("Token de autenticación no establecido.")
+
         request_url = f"{self.api_base_url}/v1alpha1/{entity_name}"
         page_size = 500
         headers = {"Authorization": f"Bearer {self.auth_token}", "Accept": "application/json"}
 
-        # Decidir si es Full Refresh o Incremental
+        # Decidir si aplicamos filtro incremental
         is_full_refresh = entity_name in self.entities_for_full_refresh
-        
+        apply_filter = (not is_full_refresh and last_extracted_ts is not None)
+
         if is_full_refresh:
             logger.info(f"--- ESTRATEGIA FULL REFRESH: {entity_name} ---")
         else:
@@ -66,11 +73,11 @@ class FudoApiClient:
             page_size=page_size,
             entity_name=entity_name,
             id_sucursal=id_sucursal,
-            apply_incremental_filter=(not is_full_refresh and last_extracted_ts is not None),
+            apply_incremental_filter=apply_filter,
             incremental_filter_ts=last_extracted_ts,
             fields_key=self.fields_key_mapping.get(entity_name),
             fields_params=self.fields_parameters.get(self.fields_key_mapping.get(entity_name, '')),
-            max_pages=-1 # <--- CAMBIAR A -1 PARA PRODUCCIÓN
+            max_pages=1 # <--- ⚠️ RECUERDA CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
         )
 
     def _get_paginated_data_generic(self, request_url, headers, page_size, entity_name, id_sucursal, 
@@ -80,11 +87,13 @@ class FudoApiClient:
         current_page = start_page
         params = {}
 
+        # Filtro de fecha
         if apply_incremental_filter and incremental_filter_ts:
             filter_field = self.incremental_filter_entities.get(entity_name, 'createdAt')
             formatted_ts = incremental_filter_ts.astimezone(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
             params[f'filter[{filter_field}]'] = f"gte.{formatted_ts}"
         
+        # Filtro de campos (Solo si está definido en el mapeo)
         if fields_key and fields_params:
             params[f'fields[{fields_key}]'] = fields_params
 
