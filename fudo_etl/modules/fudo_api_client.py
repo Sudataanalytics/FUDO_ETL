@@ -77,7 +77,7 @@ class FudoApiClient:
             incremental_filter_ts=last_extracted_ts,
             fields_key=self.fields_key_mapping.get(entity_name),
             fields_params=self.fields_parameters.get(self.fields_key_mapping.get(entity_name, '')),
-            max_pages=1 # <--- ⚠️ RECUERDA CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
+            max_pages=-1 # <--- ⚠️ RECUERDA CAMBIAR A -1 PARA PRODUCCIÓN ⚠️
         )
 
     def _get_paginated_data_generic(self, request_url, headers, page_size, entity_name, id_sucursal, 
