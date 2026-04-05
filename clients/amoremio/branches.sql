@@ -1,7 +1,7 @@
 -- clients/amoremio/branches.sql
 
 -- Limpiamos sucursales previas para este cliente
-DELETE FROM public.config_fudo_branches;
+-- DELETE FROM public.config_fudo_branches;
 
 INSERT INTO public.config_fudo_branches (id_sucursal, fudo_branch_identifier, sucursal_name, secret_manager_apikey_name, secret_manager_apisecret_name)
 VALUES

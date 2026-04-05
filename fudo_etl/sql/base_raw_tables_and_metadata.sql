@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS public.etl_fudo_extraction_status (
 
 -- La tabla de configuración de sucursales, sin inserts específicos
 CREATE TABLE IF NOT EXISTS public.config_fudo_branches (
+    id_sucursal_nro SERIAL,
     id_sucursal VARCHAR(255) PRIMARY KEY,
     fudo_branch_identifier VARCHAR(255),
     sucursal_name VARCHAR(255),

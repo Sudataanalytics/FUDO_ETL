@@ -1,5 +1,5 @@
 -- clients/miguitas/branches.sql
-DELETE FROM public.config_fudo_branches WHERE id_sucursal LIKE 'miguitas-%';
+-- DELETE FROM public.config_fudo_branches WHERE id_sucursal LIKE 'miguitas-%';
 
 INSERT INTO public.config_fudo_branches (id_sucursal, fudo_branch_identifier, sucursal_name, secret_manager_apikey_name, secret_manager_apisecret_name)
 VALUES
