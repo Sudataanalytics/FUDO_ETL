@@ -117,21 +117,17 @@ class DBManager:
     # ----------------------------------------------------------------------
 
     def insert_raw_data(self, table_name: str, records: list[dict]):
-        """
-        Inserta datos crudos en la base de datos de forma masiva (Full Refresh).
-        Se asume que la tabla ha sido truncada previamente en main.py.
-        """
         self._ensure_connection()
         if not records:
-            logger.info(f"No hay registros para insertar en {table_name} (Full Refresh).")
+            logger.info(f"No hay registros para insertar en {table_name}.")
             return
 
-        columns =[
+        columns = [
             'id_fudo', 'id_sucursal_fuente', 'fecha_extraccion_utc',
             'payload_json', 'last_updated_at_fudo', 'payload_checksum'
         ]
         
-        values_to_insert =[]
+        values_to_insert = []
         for record in records:
             values_to_insert.append((
                 record.get('id_fudo'), record.get('id_sucursal_fuente'), record.get('fecha_extraccion_utc'),
@@ -140,15 +136,19 @@ class DBManager:
         
         cols_str = ', '.join(columns)
         
-        # INSERT directo sin ON CONFLICT, porque la tabla se trunca antes
-        insert_query = f"INSERT INTO public.{table_name} ({cols_str}) VALUES %s;"
+        # Agregamos ON CONFLICT DO NOTHING como seguro de vida contra duplicados en el mismo batch
+        insert_query = f"""
+            INSERT INTO public.{table_name} ({cols_str}) 
+            VALUES %s 
+            ON CONFLICT (id_fudo, id_sucursal_fuente, payload_checksum) DO NOTHING;
+        """
 
         try:
             with self.connection.cursor() as cursor:
                 extras.execute_values(cursor, insert_query, values_to_insert, page_size=1000)
             self.connection.commit()
-            logger.info(f"Cargados {len(records)} registros en {table_name} (Full Refresh).")
+            logger.info(f"Cargados {len(records)} registros en {table_name}.")
         except Exception as e:
             self.connection.rollback()
-            logger.error(f"Error al cargar datos crudos en {table_name} (Full Refresh): {e}", exc_info=True)
+            logger.error(f"Error al cargar datos en {table_name}: {e}")
             raise

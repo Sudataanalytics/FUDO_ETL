@@ -148,31 +148,40 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
                         raw_data_records_from_api = api_client.get_data(entity, id_sucursal_internal, last_ts)
                         
                         if raw_data_records_from_api:
-                            prepared_records_for_db = []
+                            # --- NUEVA LÓGICA DE DEDUPLICACIÓN EN MEMORIA ---
+                            prepared_records_dict = {} 
                             for record in raw_data_records_from_api:
+                                fudo_id = record.get('id', str(uuid.uuid4()))
                                 payload_str = json.dumps(record, sort_keys=True)
-                                prepared_records_for_db.append({
-                                    'id_fudo': record.get('id'),
-                                    'id_sucursal_fuente': id_sucursal_internal,
-                                    'fecha_extraccion_utc': datetime.now(timezone.utc),
-                                    'payload_json': payload_str,
-                                    'last_updated_at_fudo': parse_fudo_date(record.get('attributes', {}).get('createdAt')),
-                                    'payload_checksum': md5(payload_str.encode('utf-8')).hexdigest()
-                                })
+                                checksum = md5(payload_str.encode('utf-8')).hexdigest()
+                                
+                                # Clave de unicidad: ID + Sucursal + Contenido
+                                unique_key = (fudo_id, id_sucursal_internal, checksum)
+
+                                if unique_key not in prepared_records_dict:
+                                    prepared_records_dict[unique_key] = {
+                                        'id_fudo': fudo_id,
+                                        'id_sucursal_fuente': id_sucursal_internal,
+                                        'fecha_extraccion_utc': datetime.now(timezone.utc),
+                                        'payload_json': payload_str,
+                                        'last_updated_at_fudo': parse_fudo_date(record.get('attributes', {}).get('createdAt')),
+                                        'payload_checksum': checksum
+                                    }
                             
+                            # Lista final limpia de duplicados internos de la API
+                            prepared_records_for_db = list(prepared_records_dict.values())
+                            # ------------------------------------------------
+
                             # --- CARGA INTELIGENTE ---
                             if entity in api_client.entities_for_full_refresh:
-                                # SOLO truncamos si es la PRIMERA VEZ que esta tabla aparece en TODA la ejecución
                                 if raw_table_name not in tablas_ya_truncadas:
                                     logger.info(f"    [AUDIT] TRUNCANDO '{raw_table_name}' (Primera sucursal detectada).")
                                     db_manager.execute_query(f"TRUNCATE TABLE public.{raw_table_name} CASCADE;")
                                     tablas_ya_truncadas.add(raw_table_name)
                                 
-                                # Insertamos (esto irá sumando las sucursales una debajo de otra)
                                 db_manager.insert_raw_data(raw_table_name, prepared_records_for_db)
                                 logger.info(f"    [AUDIT] '{entity}' cargados: {len(prepared_records_for_db)} (Acumulando sucursal).")
                             else:
-                                # Incremental normal
                                 db_manager.insert_raw_data(raw_table_name, prepared_records_for_db)
                             
                             metadata_manager.update_last_extraction_timestamp(id_sucursal_internal, entity, datetime.now(timezone.utc))
@@ -186,12 +195,10 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
                 continue
             time.sleep(1)
 
-        # Al terminar de recorrer todas las sucursales, refrescamos las vistas
         refresh_analytics_materialized_views(db_manager, materialized_views_configs, raw_views_configs)
 
     except Exception as e:
-        logger.critical(f"ERROR FATAL: {e}", exc_info=True)
-            
+        logger.critical(f"ERROR FATAL: {e}", exc_info=True)         
 # --- FUNCIÓN PARA DESPLEGAR LA ESTRUCTURA INICIAL DE FUDO EN LA DB ---
 # Ahora deploy_fudo_database_structure también recibe el nombre del cliente
 def deploy_fudo_database_structure(db_manager: DBManager, client_name: str):
