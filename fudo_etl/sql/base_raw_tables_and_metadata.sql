@@ -21,10 +21,10 @@ CREATE TABLE IF NOT EXISTS public.etl_fudo_extraction_status (
 );
 
 CREATE TABLE IF NOT EXISTS public.config_fudo_branches (
-    id_sucursal_nro SERIAL, -- <--- REQUERIMIENTO SUDATA (ID Numérico)
-    id_sucursal VARCHAR(255) PRIMARY KEY, -- ID Texto (Clave natural para el ETL)
+    id_branch_nro SERIAL,            -- Antes id_sucursal_nro
+    id_branch VARCHAR(255) PRIMARY KEY, -- Antes id_sucursal
     fudo_branch_identifier VARCHAR(255),
-    sucursal_name VARCHAR(255),
+    branch_name VARCHAR(255),        -- Antes sucursal_name
     secret_manager_apikey_name VARCHAR(255) NOT NULL,
     secret_manager_apisecret_name VARCHAR(255) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,

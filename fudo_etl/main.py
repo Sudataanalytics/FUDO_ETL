@@ -110,7 +110,7 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
         api_client = FudoApiClient(config['fudo_api_base_url'])
 
         branches_config = db_manager.fetch_all(
-            "SELECT id_sucursal, fudo_branch_identifier, sucursal_name, "
+            "SELECT id_branch, fudo_branch_identifier, branch_name, "
             "secret_manager_apikey_name, secret_manager_apisecret_name "
             "FROM public.config_fudo_branches WHERE is_active = TRUE"
         )
