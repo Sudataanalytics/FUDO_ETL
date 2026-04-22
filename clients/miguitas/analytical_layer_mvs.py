@@ -24,12 +24,22 @@ materialized_views_configs = [
         SELECT DISTINCT ON (pc.id_fudo, pc.id_sucursal_fuente)
             (pc.payload_json ->> 'id')::FLOAT::INTEGER AS id_rubro_fudo,
             (pc.payload_json ->> 'id') || '-' || pc.id_sucursal_fuente AS rubro_key,
-            (pc.payload_json -> 'attributes' ->> 'name')::VARCHAR(255) AS rubro_name,
+            
+            -- CAMBIO: Usamos COALESCE para que el registro nunca se filtre por falta de nombre
+            COALESCE(
+                (pc.payload_json -> 'attributes' ->> 'name'), 
+                'Categoría ' || (pc.payload_json ->> 'id')
+            )::VARCHAR(255) AS rubro_name,
+            
             cb.id_sucursal_nro AS id_sucursal
         FROM public.fudo_raw_product_categories pc
         JOIN public.config_fudo_branches cb ON pc.id_sucursal_fuente = cb.id_sucursal
-        WHERE pc.payload_json ->> 'id' IS NOT NULL AND pc.payload_json -> 'attributes' ->> 'name' IS NOT NULL
+        
+        -- CAMBIO: Quitamos la validación del nombre del WHERE
+        WHERE pc.payload_json ->> 'id' IS NOT NULL
+        
         ORDER BY pc.id_fudo, pc.id_sucursal_fuente, pc.fecha_extraccion_utc DESC;
+        
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_rubros_rubro_key ON public.mv_rubros (rubro_key);
     """),
 
