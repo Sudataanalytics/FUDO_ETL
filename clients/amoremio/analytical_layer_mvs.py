@@ -19,22 +19,36 @@ materialized_views_configs = [
     """),
 
     # ------------------ 2. PRODUCT CATEGORIES (RUBROS) ------------------
-    ('mv_product_categories', """
+ ('mv_product_categories', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_product_categories CASCADE;
         CREATE MATERIALIZED VIEW public.mv_product_categories AS
         SELECT DISTINCT ON (pc.id_fudo, pc.id_sucursal_fuente)
             (pc.payload_json ->> 'id')::FLOAT::INTEGER AS id_product_category_fudo,
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            
+            -- Key Principal: {id}-{branch_nro}
             (pc.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_category_key,
+            
             COALESCE(
                 (pc.payload_json -> 'attributes' ->> 'name'), 
                 'Category ' || (pc.payload_json ->> 'id')
             )::VARCHAR(255) AS product_category_name,
+            
+            -- NUEVO: parent_category_key (Para jerarquías en Power BI)
+            CASE 
+                WHEN (pc.payload_json -> 'relationships' -> 'parentCategory' -> 'data' ->> 'id') IS NOT NULL 
+                THEN (pc.payload_json -> 'relationships' -> 'parentCategory' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT
+                ELSE NULL 
+            END AS parent_category_key,
+            
+            -- NUEVO: enable_online_menu
+            COALESCE((pc.payload_json -> 'attributes' ->> 'enableOnlineMenu')::BOOLEAN, FALSE) AS enable_online_menu,
+            
             cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_product_categories pc
         JOIN public.config_fudo_branches cb ON pc.id_sucursal_fuente = cb.id_branch
         WHERE pc.payload_json ->> 'id' IS NOT NULL
         ORDER BY pc.id_fudo, pc.id_sucursal_fuente, pc.fecha_extraccion_utc DESC;
+        
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_product_cat_key ON public.mv_product_categories (product_category_key);
     """),
 
@@ -200,19 +214,39 @@ materialized_views_configs = [
     """),
 
     # ------------------ 10. EXPENSE CATEGORIES ------------------
-    ('mv_expense_categories', """
+     ('mv_expense_categories', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_expense_categories CASCADE;
         CREATE MATERIALIZED VIEW public.mv_expense_categories AS
         SELECT DISTINCT ON (ec.id_fudo, ec.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
-            (ec.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_category_key,
-            (ec.payload_json -> 'attributes' ->> 'name') AS expense_category_name,
-            (ec.payload_json -> 'attributes' ->> 'financialCategory') AS financial_category,
-            cb.id_branch_nro AS id_branch_nro
+            -- 1. id_expense_category (ID original numérico)
+            (ec.payload_json ->> 'id')::FLOAT::INTEGER AS id_expense_category,
+            
+            -- 2. expense_category_name (con fallback por si viene null)
+            COALESCE(
+                (ec.payload_json -> 'attributes' ->> 'name'), 
+                'Expense Category ' || (ec.payload_json ->> 'id')
+            )::VARCHAR(255) AS expense_category_name,
+            
+            -- 3. financial_category
+            (ec.payload_json -> 'attributes' ->> 'financialCategory')::VARCHAR(255) AS financial_category,
+            
+            -- 4. active (booleano)
+            COALESCE((ec.payload_json -> 'attributes' ->> 'active')::BOOLEAN, TRUE) AS active,
+            
+            -- 5. parent_category_id (ID original de la relación padre)
+            (ec.payload_json -> 'relationships' -> 'parentCategory' -> 'data' ->> 'id') AS parent_category_id,
+            
+            -- 6. id_branch_nro (ID numérico estándar de Sudata)
+            cb.id_branch_nro AS id_branch_nro,
+            
+            -- 7. expense_category_key (Llave sintética {id_fudo}-{id_branch_nro})
+            (ec.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_category_key
+
         FROM public.fudo_raw_expense_categories ec
         JOIN public.config_fudo_branches cb ON ec.id_sucursal_fuente = cb.id_branch
-        WHERE (ec.payload_json ->> 'id') IS NOT NULL
+        WHERE ec.payload_json ->> 'id' IS NOT NULL
         ORDER BY ec.id_fudo, ec.id_sucursal_fuente, ec.fecha_extraccion_utc DESC;
+        
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_exp_cat_key ON public.mv_expense_categories (expense_category_key);
     """),
 
