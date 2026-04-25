@@ -211,8 +211,8 @@ def deploy_fudo_database_structure(db_manager: DBManager, client_name: str):
         db_manager.execute_sql_script(base_raw_ddl)
         
         # 2. Tablas Lógicas del DER específicas del cliente
-        client_der_ddl = read_sql_file(f'clients/{client_name}/der_tables_ddl.sql')
-        db_manager.execute_sql_script(client_der_ddl)
+        #client_der_ddl = read_sql_file(f'clients/{client_name}/der_tables_ddl.sql')
+        #db_manager.execute_sql_script(client_der_ddl)
         
         # 3. Datos de sucursales específicos del cliente
         branches_sql = read_sql_file(f'clients/{client_name}/branches.sql')
