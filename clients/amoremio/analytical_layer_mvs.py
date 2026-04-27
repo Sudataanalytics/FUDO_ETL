@@ -1,6 +1,6 @@
 # ==============================================================================
 # MATERIALIZED VIEWS CONFIGURATIONS (Gold Layer - DER)
-# Version v4.0 - Standard Numeric Synthetic Keys {id_branch_nro}-{id_fudo}
+# Version v6.0 - Final Numeric Synthetic Keys Format: {id_fudo}-{id_branch_nro}
 # ==============================================================================
 
 materialized_views_configs = [
@@ -19,36 +19,22 @@ materialized_views_configs = [
     """),
 
     # ------------------ 2. PRODUCT CATEGORIES (RUBROS) ------------------
- ('mv_product_categories', """
+    ('mv_product_categories', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_product_categories CASCADE;
         CREATE MATERIALIZED VIEW public.mv_product_categories AS
         SELECT DISTINCT ON (pc.id_fudo, pc.id_sucursal_fuente)
             (pc.payload_json ->> 'id')::FLOAT::INTEGER AS id_product_category_fudo,
-            
-            -- Key Principal: {id}-{branch_nro}
+            -- KEY CORREGIDA: ID-NUMERO (ej: 10-2)
             (pc.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_category_key,
-            
             COALESCE(
                 (pc.payload_json -> 'attributes' ->> 'name'), 
                 'Category ' || (pc.payload_json ->> 'id')
             )::VARCHAR(255) AS product_category_name,
-            
-            -- NUEVO: parent_category_key (Para jerarquías en Power BI)
-            CASE 
-                WHEN (pc.payload_json -> 'relationships' -> 'parentCategory' -> 'data' ->> 'id') IS NOT NULL 
-                THEN (pc.payload_json -> 'relationships' -> 'parentCategory' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT
-                ELSE NULL 
-            END AS parent_category_key,
-            
-            -- NUEVO: enable_online_menu
-            COALESCE((pc.payload_json -> 'attributes' ->> 'enableOnlineMenu')::BOOLEAN, FALSE) AS enable_online_menu,
-            
             cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_product_categories pc
         JOIN public.config_fudo_branches cb ON pc.id_sucursal_fuente = cb.id_branch
         WHERE pc.payload_json ->> 'id' IS NOT NULL
         ORDER BY pc.id_fudo, pc.id_sucursal_fuente, pc.fecha_extraccion_utc DESC;
-        
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_product_cat_key ON public.mv_product_categories (product_category_key);
     """),
 
@@ -58,7 +44,7 @@ materialized_views_configs = [
         CREATE MATERIALIZED VIEW public.mv_payment_methods AS
         SELECT DISTINCT ON (pm.id_fudo, pm.id_sucursal_fuente)
             (pm.payload_json ->> 'id')::FLOAT::INTEGER AS id_payment_method_fudo,
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            -- KEY CORREGIDA: ID-NUMERO
             (pm.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS payment_method_key,
             (pm.payload_json -> 'attributes' ->> 'name')::VARCHAR(255) AS payment_method,
             cb.id_branch_nro AS id_branch_nro
@@ -74,7 +60,7 @@ materialized_views_configs = [
         DROP MATERIALIZED VIEW IF EXISTS public.mv_products CASCADE;
         CREATE MATERIALIZED VIEW public.mv_products AS
         SELECT DISTINCT ON (p.id_fudo, p.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            -- KEY CORREGIDA: ID-NUMERO
             (p.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_key,
             (p.payload_json -> 'attributes' ->> 'name')::VARCHAR(255) AS product_name,
             (p.payload_json -> 'attributes' ->> 'code')::VARCHAR(50) AS code,
@@ -83,7 +69,7 @@ materialized_views_configs = [
             (p.payload_json -> 'attributes' ->> 'description')::TEXT AS description,
             (p.payload_json -> 'attributes' ->> 'price')::FLOAT AS price,
             (p.payload_json -> 'attributes' ->> 'stock')::FLOAT AS stock,
-            -- FK formatted as {category_id}-{branch_nro}
+            -- FK CORREGIDA
             (p.payload_json -> 'relationships' -> 'productCategory' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_category_key_fk,
             cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_products p
@@ -93,12 +79,12 @@ materialized_views_configs = [
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_products_key ON public.mv_products (product_key);
     """),
 
-    # ------------------ 5. SALES ORDERS ------------------
+    # ------------------ 5. SALES ORDERS (CABECERA) ------------------
     ('mv_sales_orders', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_sales_orders CASCADE;
         CREATE MATERIALIZED VIEW public.mv_sales_orders AS
         SELECT DISTINCT ON (s.id_fudo, s.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            -- KEY CORREGIDA: ID-NUMERO
             (s.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS order_key,
             (s.payload_json -> 'attributes' ->> 'saleType') AS sale_type,
             (s.payload_json -> 'attributes' ->> 'saleState') AS sale_state,
@@ -114,18 +100,19 @@ materialized_views_configs = [
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_sales_order_key ON public.mv_sales_orders (order_key);
     """),
 
-    # ------------------ 6. PAYMENTS ------------------
+    # ------------------ 6. PAYMENTS (HECHOS) ------------------
     ('mv_payments', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_payments CASCADE;
         CREATE MATERIALIZED VIEW public.mv_payments AS
         SELECT DISTINCT ON (p.id_fudo, p.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            -- KEY CORREGIDA: ID-NUMERO
             (p.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS payment_key,
+            -- FKs CORREGIDAS
             (p.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS payment_method_key,
-            (p.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
-            -- FKs
             (p.payload_json -> 'relationships' -> 'sale' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS order_key_fk,
             (p.payload_json -> 'relationships' -> 'expense' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_key_fk,
+            
+            (p.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
             CASE WHEN (p.payload_json -> 'relationships' -> 'expense' -> 'data' ->> 'id') IS NOT NULL THEN 'EXPENSE'
                  WHEN (p.payload_json -> 'relationships' -> 'sale' -> 'data' ->> 'id') IS NOT NULL THEN 'SALE'
                  ELSE 'OTHER' END AS transaction_type,
@@ -140,37 +127,27 @@ materialized_views_configs = [
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_payments_key ON public.mv_payments (payment_key);
     """),
 
-# ------------------ 7. EXPENSES (Facts) ------------------
+    # ------------------ 7. EXPENSES (HECHOS) ------------------
     ('mv_expenses', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_expenses CASCADE;
         CREATE MATERIALIZED VIEW public.mv_expenses AS
         SELECT DISTINCT ON (e.id_fudo, e.id_sucursal_fuente)
-            -- 1. Clave Primaria Sintética (ID-SUCURSAL)
-            (e.payload_json ->> 'id') || '-' || e.id_sucursal_fuente AS expense_key,
+            -- KEY CORREGIDA: ID-NUMERO
+            (e.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_key,
+            -- FKs CORREGIDAS
+            (e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_payment_method_key,
+            (e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS provider_key,
+            (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_category_key,
             
-            -- 2. Claves de Relación
-            (e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_payment_method_key,
-            (e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS provider_key,
-            (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_category_key,
-            
-            -- 3. Atributos
             (e.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
             (e.payload_json -> 'attributes' ->> 'description')::TEXT AS description,
             (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE AS expense_date,
-            
-            -- 4. ID Numérico
             cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_expenses e
         JOIN public.config_fudo_branches cb ON e.id_sucursal_fuente = cb.id_branch
-        WHERE (e.payload_json ->> 'id') IS NOT NULL
-          AND e.id_sucursal_fuente IS NOT NULL
-          
-          -- 🛡️ FILTRO DE CALIDAD DE DATOS (DATA QUALITY)
-          -- Evita fechas defectuosas (ej: año 0001) que rompen Power BI
-          -- Solo permitimos gastos entre el año 2000 y el 2100
+        WHERE e.payload_json ->> 'id' IS NOT NULL
+          -- Filtro de Calidad de Datos (Garantizar años razonables)
           AND (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE >= '2000-01-01'
-          AND (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE <= '2100-01-01'
-          
         ORDER BY e.id_fudo, e.id_sucursal_fuente, e.fecha_extraccion_utc DESC;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_expenses_key ON public.mv_expenses (expense_key);
     """),
@@ -180,7 +157,7 @@ materialized_views_configs = [
         DROP MATERIALIZED VIEW IF EXISTS public.mv_providers CASCADE;
         CREATE MATERIALIZED VIEW public.mv_providers AS
         SELECT DISTINCT ON (p.id_fudo, p.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            -- KEY CORREGIDA: ID-NUMERO
             (p.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS provider_key,
             (p.payload_json -> 'attributes' ->> 'name')::VARCHAR(255) AS name,
             (p.payload_json -> 'attributes' ->> 'email')::TEXT AS email,
@@ -197,10 +174,11 @@ materialized_views_configs = [
         DROP MATERIALIZED VIEW IF EXISTS public.mv_sales_order_lines CASCADE;
         CREATE MATERIALIZED VIEW public.mv_sales_order_lines AS
         SELECT DISTINCT ON (i.id_fudo, i.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
+            -- KEYS CORREGIDAS: ID-NUMERO
             (i.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS order_line_key,
             (i.payload_json -> 'relationships' -> 'sale' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS order_key_fk,
             (i.payload_json -> 'relationships' -> 'product' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_key_fk,
+            
             (i.payload_json -> 'attributes' ->> 'price')::FLOAT AS price_unit, 
             COALESCE(((i.payload_json -> 'attributes' ->> 'quantity')::FLOAT::INTEGER), 0) AS qty,
             ((i.payload_json -> 'attributes' ->> 'price')::FLOAT * (i.payload_json -> 'attributes' ->> 'quantity')::FLOAT)::FLOAT AS amount_total_line,
@@ -214,79 +192,22 @@ materialized_views_configs = [
     """),
 
     # ------------------ 10. EXPENSE CATEGORIES ------------------
-     ('mv_expense_categories', """
+    ('mv_expense_categories', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_expense_categories CASCADE;
         CREATE MATERIALIZED VIEW public.mv_expense_categories AS
         SELECT DISTINCT ON (ec.id_fudo, ec.id_sucursal_fuente)
-            -- 1. id_expense_category (ID original numérico)
-            (ec.payload_json ->> 'id')::FLOAT::INTEGER AS id_expense_category,
-            
-            -- 2. expense_category_name (con fallback por si viene null)
-            COALESCE(
-                (ec.payload_json -> 'attributes' ->> 'name'), 
-                'Expense Category ' || (ec.payload_json ->> 'id')
-            )::VARCHAR(255) AS expense_category_name,
-            
-            -- 3. financial_category
-            (ec.payload_json -> 'attributes' ->> 'financialCategory')::VARCHAR(255) AS financial_category,
-            
-            -- 4. active (booleano)
-            COALESCE((ec.payload_json -> 'attributes' ->> 'active')::BOOLEAN, TRUE) AS active,
-            
-            -- 5. parent_category_id (ID original de la relación padre)
-            (ec.payload_json -> 'relationships' -> 'parentCategory' -> 'data' ->> 'id') AS parent_category_id,
-            
-            -- 6. id_branch_nro (ID numérico estándar de Sudata)
-            cb.id_branch_nro AS id_branch_nro,
-            
-            -- 7. expense_category_key (Llave sintética {id_fudo}-{id_branch_nro})
-            (ec.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_category_key
-
+            -- KEY CORREGIDA: ID-NUMERO
+            (ec.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS expense_category_key,
+            (ec.payload_json -> 'attributes' ->> 'name') AS expense_category_name,
+            (ec.payload_json -> 'attributes' ->> 'financialCategory') AS financial_category,
+            cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_expense_categories ec
         JOIN public.config_fudo_branches cb ON ec.id_sucursal_fuente = cb.id_branch
-        WHERE ec.payload_json ->> 'id' IS NOT NULL
+        WHERE (ec.payload_json ->> 'id') IS NOT NULL
         ORDER BY ec.id_fudo, ec.id_sucursal_fuente, ec.fecha_extraccion_utc DESC;
-        
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_exp_cat_key ON public.mv_expense_categories (expense_category_key);
     """),
-
-    # ------------------ 11. PRODUCT CATEGORIES DETAILS ------------------
-    ('mv_product_categories_details', """
-        DROP MATERIALIZED VIEW IF EXISTS public.mv_product_categories_details CASCADE;
-        CREATE MATERIALIZED VIEW public.mv_product_categories_details AS
-        SELECT DISTINCT ON (pc.id_fudo, pc.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
-            (pc.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_category_key,
-            (pc.payload_json -> 'attributes' ->> 'name') AS product_category_name,
-            (pc.payload_json -> 'attributes' ->> 'position')::FLOAT::INTEGER AS "position",
-            (pc.payload_json -> 'attributes' ->> 'preparationTime')::FLOAT::INTEGER AS preparation_time,
-            cb.id_branch_nro AS id_branch_nro
-        FROM public.fudo_raw_product_categories pc
-        JOIN public.config_fudo_branches cb ON pc.id_sucursal_fuente = cb.id_branch
-        WHERE (pc.payload_json ->> 'id') IS NOT NULL
-        ORDER BY pc.id_fudo, pc.id_sucursal_fuente, pc.fecha_extraccion_utc DESC;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_prod_cat_det_key ON public.mv_product_categories_details (product_category_key);
-    """),
-
-    # ------------------ 12. PRODUCT PRICES BY BRANCH ------------------
-    ('mv_product_prices_by_branch', """
-        DROP MATERIALIZED VIEW IF EXISTS public.mv_product_prices_by_branch CASCADE;
-        CREATE MATERIALIZED VIEW public.mv_product_prices_by_branch AS
-        SELECT DISTINCT ON (p.id_fudo, p.id_sucursal_fuente)
-            -- FORMATO CORREGIDO: {id_fudo}-{branch_nro}
-            (p.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_branch_key,
-            (p.payload_json -> 'attributes' ->> 'name')::VARCHAR(255) AS product_name,
-            (p.payload_json -> 'attributes' ->> 'price')::FLOAT AS price,
-            (p.payload_json -> 'attributes' ->> 'stock')::FLOAT AS stock,
-            cb.id_branch_nro AS id_branch_nro
-        FROM public.fudo_raw_products p
-        JOIN public.config_fudo_branches cb ON p.id_sucursal_fuente = cb.id_branch
-        WHERE p.payload_json ->> 'id' IS NOT NULL
-        ORDER BY p.id_fudo, p.id_sucursal_fuente, p.fecha_extraccion_utc DESC;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_prod_price_branch_key ON public.mv_product_prices_by_branch (product_branch_key);
-    """),
 ]
-
 
 # ==============================================================================
 # RAW VIEW CONFIGURATIONS (Silver Layer - Standardized)
