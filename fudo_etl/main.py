@@ -74,7 +74,7 @@ def refresh_analytics_materialized_views(db_manager: DBManager,
 
             # --- CORRECCIÓN CRÍTICA AQUÍ: Usar REFRESH CONCURRENTLY ---
             logger.info(f"    Refrescando MV '{mv_name}' CONCURRENTLY...")
-            db_manager.execute_query(f"REFRESH MATERIALIZED VIEW CONCURRENTLY public.{mv_name};")
+            db_manager.execute_query(f"REFRESH MATERIALIZED VIEW public.{mv_name};")
             logger.info(f"    MV '{mv_name}' refrescada exitosamente.")
             # --------------------------------------------------------
 
