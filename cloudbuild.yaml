@@ -22,8 +22,8 @@ steps:
       - '--set-secrets=DB_CONNECTION_STRING=D-002-MIGUITAS-DB-CONN:latest'
       - '--region=southamerica-east1'
       - '--task-timeout=7200'  
-      - '--memory=1Gi'         
-      - '--cpu=0.5'
+      - '--memory=2Gi'         
+      - '--cpu=1'
     id: 'Deploy-Miguitas'
 
   # 4. Desplegar/Actualizar Job de d-003-amoremio
@@ -39,8 +39,8 @@ steps:
       - '--set-secrets=DB_CONNECTION_STRING=D-003-AMOREMIO-DB-CONN:latest'
       - '--region=southamerica-east1'
       - '--task-timeout=7200'  
-      - '--memory=1Gi'         
-      - '--cpu=0.5'
+      - '--memory=2Gi'         
+      - '--cpu=1'
     id: 'Deploy-Amoremio'
 
 images:
