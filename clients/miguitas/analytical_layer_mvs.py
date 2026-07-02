@@ -19,7 +19,6 @@ materialized_views_configs = [
     """),
 
     # ------------------ 2. PRODUCT CATEGORIES (RUBROS) ------------------
-    # ------------------ 2. PRODUCT CATEGORIES (RUBROS) ------------------
     ('mv_product_categories', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_product_categories CASCADE;
         CREATE MATERIALIZED VIEW public.mv_product_categories AS
