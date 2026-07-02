@@ -55,7 +55,7 @@ steps:
       # Ajustamos CLIENT_NAME a bodegon
       - '--set-env-vars=CLIENT_NAME=bodegon,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
       # El nombre del secreto debe ser el que creaste en GCP
-      - '--set-secrets=DB_CONNECTION_STRING=D-003-BODEGON-DB-CONN:latest'
+      - '--set-secrets=DB_CONNECTION_STRING=D-004-BODEGON-DB-CONN:latest'
       - '--region=southamerica-east1'
       - '--task-timeout=7200'  
       - '--memory=2Gi'         
