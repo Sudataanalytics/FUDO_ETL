@@ -155,6 +155,7 @@ materialized_views_configs = [
         CREATE MATERIALIZED VIEW public.mv_expenses AS
         SELECT DISTINCT ON (e.id_fudo, e.id_sucursal_fuente)
             (e.payload_json ->> 'id') AS id_expense,
+            e.id_sucursal_fuente AS id_branch_nro, 
             e.id_sucursal_fuente AS id_sucursal,
             (e.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
             (e.payload_json -> 'attributes' ->> 'description') AS description,
