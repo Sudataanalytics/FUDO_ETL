@@ -151,35 +151,38 @@ materialized_views_configs = [
 
     # ------------------ 7. EXPENSES (HECHOS) ------------------
     ('mv_expenses', """
-        DROP MATERIALIZED VIEW IF EXISTS public.mv_expenses CASCADE;
-        CREATE MATERIALIZED VIEW public.mv_expenses AS
-        SELECT DISTINCT ON (e.id_fudo, e.id_sucursal_fuente)
-            (e.payload_json ->> 'id') AS id_expense,
-            e.id_sucursal_fuente AS id_sucursal,
-            (e.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
-            (e.payload_json -> 'attributes' ->> 'description') AS description,
-            (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE AS expense_date,
-            (e.payload_json -> 'attributes' ->> 'status') AS status,
-            (e.payload_json -> 'attributes' ->> 'dueDate')::TIMESTAMP WITH TIME ZONE AS due_date,
-            (e.payload_json -> 'attributes' ->> 'canceled')::BOOLEAN AS canceled,
-            (e.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE AS created_at,
-            (e.payload_json -> 'attributes' ->> 'paymentDate')::TIMESTAMP WITH TIME ZONE AS payment_date,
-            (e.payload_json -> 'attributes' ->> 'receiptNumber') AS receipt_number,
-            (e.payload_json -> 'attributes' ->> 'useInCashCount')::BOOLEAN AS use_in_cash_count,
-            (e.payload_json -> 'relationships' -> 'user' -> 'data' ->> 'id') AS user_id,
-            (e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id') AS provider_id,
-            (e.payload_json -> 'relationships' -> 'receiptType' -> 'data' ->> 'id') AS receipt_type_id,
-            (e.payload_json -> 'relationships' -> 'cashRegister' -> 'data' ->> 'id') AS cash_register_id,
-            (e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') AS payment_method_id,
-            (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') AS expense_category_id,
-            (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_category_key
-        FROM public.fudo_raw_expenses e
-        WHERE (e.payload_json ->> 'id') IS NOT NULL 
-        AND e.id_sucursal_fuente IS NOT NULL
-        AND (e.payload_json -> 'attributes' ->> 'canceled') IS NULL  -- <--- ¡ESTE ES EL CAMBIO!
-        ORDER BY e.id_fudo, e.id_sucursal_fuente, e.fecha_extraccion_utc DESC;
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_expenses_id_sucursal ON public.mv_expenses (id_expense, id_sucursal);
-    """),
+            DROP MATERIALIZED VIEW IF EXISTS public.mv_expenses CASCADE;
+            CREATE MATERIALIZED VIEW public.mv_expenses AS
+            SELECT DISTINCT ON (e.id_fudo, e.id_sucursal_fuente)
+                (e.payload_json ->> 'id') || '-' || e.id_sucursal_fuente AS expense_key,
+                (e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_payment_method_key,
+                (e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS provider_key,
+                (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_category_key,
+                (e.payload_json ->> 'id') AS id_expense,
+                e.id_sucursal_fuente AS id_branch_nro,
+                (e.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
+                (e.payload_json -> 'attributes' ->> 'description') AS description,
+                (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE AS expense_date,
+                (e.payload_json -> 'attributes' ->> 'status') AS status,
+                (e.payload_json -> 'attributes' ->> 'dueDate')::TIMESTAMP WITH TIME ZONE AS due_date,
+                (e.payload_json -> 'attributes' ->> 'canceled')::BOOLEAN AS canceled,
+                (e.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE AS created_at,
+                (e.payload_json -> 'attributes' ->> 'paymentDate')::TIMESTAMP WITH TIME ZONE AS payment_date,
+                (e.payload_json -> 'attributes' ->> 'receiptNumber') AS receipt_number,
+                (e.payload_json -> 'attributes' ->> 'useInCashCount')::BOOLEAN AS use_in_cash_count,
+                (e.payload_json -> 'relationships' -> 'user' -> 'data' ->> 'id') AS user_id,
+                (e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id') AS provider_id,
+                (e.payload_json -> 'relationships' -> 'receiptType' -> 'data' ->> 'id') AS receipt_type_id,
+                (e.payload_json -> 'relationships' -> 'cashRegister' -> 'data' ->> 'id') AS cash_register_id,
+                (e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') AS payment_method_id,
+                (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') AS expense_category_id
+            FROM public.fudo_raw_expenses e
+            WHERE (e.payload_json ->> 'id') IS NOT NULL 
+              AND e.id_sucursal_fuente IS NOT NULL
+              AND (e.payload_json -> 'attributes' ->> 'canceled') IS NULL
+            ORDER BY e.id_fudo, e.id_sucursal_fuente, e.fecha_extraccion_utc DESC;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_expenses_key ON public.mv_expenses (expense_key);
+        """),
 
     # ------------------ 8. PROVIDERS ------------------
     ('mv_providers', """
