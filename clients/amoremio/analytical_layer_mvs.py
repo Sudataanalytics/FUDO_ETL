@@ -151,13 +151,18 @@ materialized_views_configs = [
 
     # ------------------ 7. EXPENSES (HECHOS) ------------------
     ('mv_expenses', """
-            DROP MATERIALIZED VIEW IF EXISTS public.mv_expenses CASCADE;
+           DROP MATERIALIZED VIEW IF EXISTS public.mv_expenses CASCADE;
             CREATE MATERIALIZED VIEW public.mv_expenses AS
             SELECT DISTINCT ON (e.id_fudo, e.id_sucursal_fuente)
-                (e.payload_json ->> 'id') || '-' || e.id_sucursal_fuente AS expense_key,
-                (e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_payment_method_key,
-                (e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS provider_key,
-                (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') || '-' || e.id_sucursal_fuente AS expense_category_key,
+                -- Usamos COALESCE para evitar que una relación nula rompa toda la Key
+                COALESCE(e.payload_json ->> 'id', '0') || '-' || e.id_sucursal_fuente AS expense_key,
+                
+                COALESCE(e.payload_json -> 'relationships' -> 'paymentMethod' -> 'data' ->> 'id', '0') || '-' || e.id_sucursal_fuente AS expense_payment_method_key,
+                
+                COALESCE(e.payload_json -> 'relationships' -> 'provider' -> 'data' ->> 'id', '0') || '-' || e.id_sucursal_fuente AS provider_key,
+                
+                COALESCE(e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id', '0') || '-' || e.id_sucursal_fuente AS expense_category_key,
+                
                 (e.payload_json ->> 'id') AS id_expense,
                 e.id_sucursal_fuente AS id_branch_nro,
                 (e.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
@@ -178,9 +183,10 @@ materialized_views_configs = [
                 (e.payload_json -> 'relationships' -> 'expenseCategory' -> 'data' ->> 'id') AS expense_category_id
             FROM public.fudo_raw_expenses e
             WHERE (e.payload_json ->> 'id') IS NOT NULL 
-              AND e.id_sucursal_fuente IS NOT NULL
-              AND (e.payload_json -> 'attributes' ->> 'canceled') IS NULL
+            AND e.id_sucursal_fuente IS NOT NULL
+            AND (e.payload_json -> 'attributes' ->> 'canceled') IS NULL
             ORDER BY e.id_fudo, e.id_sucursal_fuente, e.fecha_extraccion_utc DESC;
+
             CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_expenses_key ON public.mv_expenses (expense_key);
         """),
 
