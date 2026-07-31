@@ -62,6 +62,25 @@ steps:
       - '--cpu=1'
     id: 'Deploy-Bodegon'
 
+       # 6. Desplegar/Actualizar Job de d-005-foodclub
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'jobs'
+      - 'deploy'
+      - 'd-005-foodclub'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
+      # Ajustamos CLIENT_NAME a bodegon
+      - '--set-env-vars=CLIENT_NAME=bodegon,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
+      # El nombre del secreto debe ser el que creaste en GCP
+      - '--set-secrets=DB_CONNECTION_STRING=D-005-FOODCLUB-DB-CONN:latest,FUDO_FOODCLUB_APIKEY=FUDO-FOODCLUB-APIKEY:latest,FUDO_FOODCLUB_APISECRET=FUDO-FOODCLUB-APISECRET:latest,FUDO_PIZZACLUBMA_APIKEY=FUDO-PIZZACLUBMA-APIKEY:latest,FUDO_PIZZACLUBMA_APISECRET=FUDO-PIZZACLUBMA-APISECRET:latest,FUDO_PIZZACLUBCO_APIKEY=FUDO-PIZZACLUBCO-APIKEY:latest,FUDO_PIZZACLUBCO_APISECRET=FUDO-PIZZACLUBCO-APISECRET:latest,FUDO_PIZZACLUBPL_APIKEY=FUDO-PIZZACLUBPL-APIKEY:latest,FUDO_PIZZACLUBPL_APISECRET=FUDO-PIZZACLUBPL-APISECRET:latest,FUDO_BURGERCLUBAR_APIKEY=FUDO-BURGERCLUBAR-APIKEY:latest,FUDO_BURGERCLUBAR_APISECRET=FUDO-BURGERCLUBAR-APISECRET:latest,FUDO_MILACLUB_APIKEY=FUDO-MILACLUB-APIKEY:latest,FUDO_MILACLUB_APISECRET=FUDO-MILACLUB-APISECRET:latest,FUDO_AUTH_ENDPOINT=FUDO-AUTH-ENDPOINT:latest,FUDO_API_BASE_URL=FUDO-API-BASE-URL:latest,GCP_PROJECT_ID=GCP-PROJECT-ID:latest'
+      - '--region=southamerica-east1'
+      - '--task-timeout=7200'  
+      - '--memory=2Gi'         
+      - '--cpu=1'
+    id: 'Deploy-Foodclub'
+
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
 
