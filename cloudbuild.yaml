@@ -74,7 +74,7 @@ steps:
       - '--update-env-vars=CLIENT_NAME=foodclub,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
       - '--set-secrets=DB_CONNECTION_STRING=D-005-FOODCLUB-DB-CONN:latest,FUDO_FOODCLUB_APIKEY=FUDO-FOODCLUB-APIKEY:latest,FUDO_FOODCLUB_APISECRET=FUDO-FOODCLUB-APISECRET:latest'
       - '--region=southamerica-east1'
-      - '--task-timeout=7200'  
+      - '--task-timeout=10800'  
       - '--memory=4Gi'         
       - '--cpu=1'
     id: 'Deploy-Foodclub'
