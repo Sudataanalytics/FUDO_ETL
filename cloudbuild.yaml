@@ -96,6 +96,23 @@ steps:
       - '--cpu=1'
     id: 'Deploy-LoDePepe'
 
+    # 8. Desplegar/Actualizar Job de d-007-meso
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'jobs'
+      - 'deploy'
+      - 'd-007-meso'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
+      - '--set-env-vars=CLIENT_NAME=meso,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
+      - '--set-secrets=DB_CONNECTION_STRING=D-007-MESO-DB-CONN:latest,FUDO_MESO_UNIDAD_APIKEY=FUDO_MESO_UNIDAD_APIKEY:latest,FUDO_MESO_UNIDAD_APISECRET=FUDO_MESO_UNIDAD_APISECRET:latest,FUDO_MESO_TALLERPAN_APIKEY=FUDO_MESO_TALLERPAN_APIKEY:latest,FUDO_MESO_TALLERPAN_APISECRET=FUDO_MESO_TALLERPAN_APISECRET:latest,FUDO_MESO_CATAMARCA_APIKEY=FUDO_MESO_CATAMARCA_APIKEY:latest,FUDO_MESO_CATAMARCA_APISECRET=FUDO_MESO_CATAMARCA_APISECRET:latest,FUDO_MESO_TALLERPIZZAS_APIKEY=FUDO_MESO_TALLERPIZZAS_APIKEY:latest,FUDO_MESO_TALLERPIZZAS_APISECRET=FUDO_MESO_TALLERPIZZAS_APISECRET:latest'
+      - '--region=southamerica-east1'
+      - '--task-timeout=7200'  
+      - '--memory=2Gi'         
+      - '--cpu=1'
+    id: 'Deploy-Meso'
+
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
 
