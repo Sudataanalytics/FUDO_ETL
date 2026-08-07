@@ -89,7 +89,7 @@ steps:
       - 'd-006-lodepepe'
       - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/fudo-etl-repo/fudo-gen-image:latest'
       - '--set-env-vars=CLIENT_NAME=lodepepe,GCP_PROJECT_ID=$PROJECT_ID,FUDO_AUTH_ENDPOINT=https://auth.fu.do/api,FUDO_API_BASE_URL=https://api.fu.do'
-      - '--set-secrets=DB_CONNECTION_STRING=D-006-LODEPEPE-DB-CONN:latest'
+      - '--set-secrets=DB_CONNECTION_STRING=D-006-LODEPEPE-DB-CONN:latest,FUDO_LODEPEPE_SANJUAN_APIKEY=FUDO_LODEPEPE_SANJUAN_APIKEY:latest,FUDO_LODEPEPE_SANJUAN_APISECRET=FUDO_LODEPEPE_SANJUAN_APISECRET:latest,FUDO_LODEPEPE_RIOJA_APIKEY=FUDO_LODEPEPE_RIOJA_APIKEY:latest,FUDO_LODEPEPE_RIOJA_APISECRET=FUDO_LODEPEPE_RIOJA_APISECRET:latest,FUDO_LODEPEPE_UNIPLAZA_APIKEY=FUDO_LODEPEPE_UNIPLAZA_APIKEY:latest,FUDO_LODEPEPE_UNIPLAZA_APISECRET=FUDO_LODEPEPE_UNIPLAZA_APISECRET:latest'
       - '--region=southamerica-east1'
       - '--task-timeout=7200'
       - '--memory=2Gi'
