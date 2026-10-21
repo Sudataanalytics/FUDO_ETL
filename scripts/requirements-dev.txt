@@ -1,0 +1,3 @@
+# Herramientas de profiling (solo para pruebas locales, no van en la imagen de producción)
+memray>=1.13
+py-spy>=0.4
