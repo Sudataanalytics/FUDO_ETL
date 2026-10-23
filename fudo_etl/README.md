@@ -36,23 +36,7 @@ FUDO/
 1. Preparación Local
 Entorno Virtual: python -m venv venv -> .\venv\Scripts\activate
 Dependencias: pip install -r fudo_etl/requirements.txt
-Funcionamiento de la carga:
-- La API se lee página por página y cada página se carga apenas llega (la memoria no crece con la historia del cliente).
-- Entidades full refresh: se cargan en una tabla staging (stg_fudo_raw_*) y luego se reemplazan los datos de la sucursal en una sola transacción. Si algo falla, la tabla RAW queda como estaba.
-- Las MVs se crean solo si no existen y luego se refrescan con REFRESH MATERIALIZED VIEW CONCURRENTLY. Si se cambia la definición de una MV, correr el job una vez con REBUILD_MVS=true.
-- Si falla cualquier sucursal/entidad/MV, el proceso termina con exit code 1 (el job queda como fallido en Cloud Run).
-- La extracción corre en paralelo: ETL_BRANCH_WORKERS sucursales a la vez y, dentro de cada una, ETL_ENTITY_WORKERS entidades a la vez (cada hilo lee de la API y carga sus páginas). Los requests simultáneos a Fudo son el producto de ambos; si aparecen muchos 429, bajarlos.
-- La base se accede con un pool de conexiones (por defecto una por hilo + 1). Una conexión caída se descarta y se abre otra; las ociosas por más de DB_POOL_PING_AFTER_IDLE_SECONDS se validan antes de usarse.
-Variables opcionales (con sus valores por defecto):
-- ETL_BRANCH_WORKERS=3, ETL_ENTITY_WORKERS=2
-- DB_POOL_SIZE=ETL_BRANCH_WORKERS x ETL_ENTITY_WORKERS + 1, DB_POOL_PING_AFTER_IDLE_SECONDS=60
-- DB_STATEMENT_TIMEOUT_MS=900000, DB_LOCK_TIMEOUT_MS=30000, DB_IDLE_IN_TX_TIMEOUT_MS=300000
-- DB_MAX_RETRIES=4, DB_RETRY_BASE_DELAY_SECONDS=2
-- API_ENTITY_DEADLINE_SECONDS=1800 (tiempo máximo para extraer una entidad de una sucursal)
-- API_INTER_PAGE_DELAY_SECONDS=0.15 (pausa entre páginas de la API de Fudo)
-- FUDO_MAX_RETRY_AFTER_SECONDS=300 (tope de espera cuando Fudo responde con Retry-After; Fudo limita por ventanas de ~5 min, compartidas entre sucursales)
-- FUDO_TOKEN_MIN_VALIDITY_MINUTES=60 (vigencia mínima para reusar un token guardado; ante un 401 se renueva solo)
-- REBUILD_MVS=false
+Producción: En fudo_etl/modules/fudo_api_client.py, asegúrese de que max_pages sea -1.
 2. Automatización en GCP
 Cada git push a la rama main dispara Cloud Build, el cual:
 Construye la imagen Docker genérica.

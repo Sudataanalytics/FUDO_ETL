@@ -1,6 +1,5 @@
-requests>=2.32
-urllib3>=2.0
-psycopg2-binary>=2.9
+requests
+psycopg2-binary
 python-dotenv
 google-cloud-secret-manager
-packaging
+packaging                 
