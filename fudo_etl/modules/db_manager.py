@@ -62,6 +62,8 @@ class DBManager:
         # Timeouts del lado del servidor (ms). Evitan que el ETL quede colgado esperando un lock
         # (ej. Power BI leyendo una tabla) o una consulta que no termina nunca.
         self.statement_timeout_ms = _env_int("DB_STATEMENT_TIMEOUT_MS", 15 * 60 * 1000)
+        # El swap de staging a RAW de una sucursal grande (ej. 100k+ items/payments) puede pasar los 15 min
+        self.swap_statement_timeout_ms = _env_int("DB_SWAP_STATEMENT_TIMEOUT_MS", 45 * 60 * 1000)
         self.lock_timeout_ms = _env_int("DB_LOCK_TIMEOUT_MS", 30 * 1000)
         self.idle_in_tx_timeout_ms = _env_int("DB_IDLE_IN_TX_TIMEOUT_MS", 5 * 60 * 1000)
         # Una conexión que estuvo ociosa más que esto se valida con SELECT 1 antes de usarla
@@ -267,6 +269,8 @@ class DBManager:
         """
         cols = ', '.join(RAW_COLUMNS)
         self.execute_in_transaction([
+            # SET LOCAL: el timeout más largo vale solo para esta transacción, la conexión vuelve al pool con el normal
+            (f"SET LOCAL statement_timeout = {int(self.swap_statement_timeout_ms)};", None),
             (f"DELETE FROM public.{raw_table_name} WHERE id_sucursal_fuente = %s;", (id_sucursal,)),
             (f"INSERT INTO public.{raw_table_name} ({cols}) "
              f"SELECT {cols} FROM public.{staging_table} WHERE id_sucursal_fuente = %s "

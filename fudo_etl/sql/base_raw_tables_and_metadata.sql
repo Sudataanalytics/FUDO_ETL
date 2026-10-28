@@ -163,3 +163,32 @@ CREATE TABLE IF NOT EXISTS public.fudo_raw_providers (
     last_updated_at_fudo TIMESTAMP WITH TIME ZONE, payload_checksum TEXT NOT NULL,
     PRIMARY KEY (id_fudo, id_sucursal_fuente, payload_checksum)
 );
+
+-- ----------------------------------------------------------------------
+-- 3. ÍNDICES POR SUCURSAL (RAW Y STAGING)
+-- ----------------------------------------------------------------------
+-- El Full Refresh borra/copia los datos de UNA sucursal (WHERE id_sucursal_fuente = ...).
+-- La PK empieza por id_fudo y no sirve para ese filtro: sin este índice se recorre la tabla entera.
+-- Las tablas staging nuevas lo heredan por el LIKE ... INCLUDING ALL; acá se cubren las que ya existían.
+
+DO $$
+DECLARE
+    t RECORD;
+BEGIN
+    FOR t IN
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public'
+          AND (tablename LIKE 'fudo\_raw\_%' OR tablename LIKE 'stg\_fudo\_raw\_%')
+          -- Una staging creada con LIKE ya trae el índice copiado (con otro nombre): no duplicarlo
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_indexes i
+              WHERE i.schemaname = 'public' AND i.tablename = pg_tables.tablename
+                AND i.indexdef LIKE '%(id_sucursal_fuente)'
+          )
+    LOOP
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS %I ON public.%I (id_sucursal_fuente);',
+            'idx_' || t.tablename || '_sucursal', t.tablename
+        );
+    END LOOP;
+END $$;

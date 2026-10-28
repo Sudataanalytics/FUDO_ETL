@@ -16,7 +16,7 @@ import psycopg2
 from modules.config import load_config
 from modules.db_manager import DBManager
 from modules.etl_metadata_manager import ETLMetadataManager
-from modules.fudo_auth import BranchTokenProvider, FudoAuthenticator
+from modules.fudo_auth import BranchTokenProvider, FudoAuthenticator, CREDENTIAL_ERRORS
 from modules.fudo_api_client import FudoApiClient
 
 # Versión del ETL. Aparece en cada línea de log para identificar qué build corre en GCP.
@@ -154,8 +154,12 @@ def authenticate_branches(authenticator: FudoAuthenticator,
         try:
             token_provider = BranchTokenProvider(authenticator, id_sucursal, api_key_secret_name, api_secret_secret_name)
             available.append((branch_data, token_provider))
+        except CREDENTIAL_ERRORS as e:
+            logger.warning(f"[CREDENCIALES] Sucursal '{branch_name}' ({id_sucursal}) omitida: {e}")
+            skipped.append(id_sucursal)
         except Exception as e:
-            logger.error(f"[CREDENCIALES] Sucursal '{branch_name}' ({id_sucursal}) omitida: {e}")
+            # Falla inesperada (red, base, respuesta rara de Fudo): se omite igual, pero se deja el detalle
+            logger.error(f"[CREDENCIALES] Sucursal '{branch_name}' ({id_sucursal}) omitida: {e}", exc_info=True)
             skipped.append(id_sucursal)
 
     logger.info(f"[CREDENCIALES] {len(available)}/{len(branches_config)} sucursales con credenciales válidas.")

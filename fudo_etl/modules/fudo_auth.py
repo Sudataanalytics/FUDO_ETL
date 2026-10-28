@@ -8,10 +8,19 @@ from datetime import datetime, timedelta, timezone
 
 from .db_manager import DBManager
 from .etl_metadata_manager import ETLMetadataManager
-from .get_secret import get_secret
+from .get_secret import get_secret, SecretNotFoundError
 from .http_retry import build_retry_session
 
 logger = logging.getLogger(__name__)
+
+
+class InvalidCredentialsError(Exception):
+    """Fudo rechazó el apiKey/apiSecret de la sucursal (401/403)."""
+
+
+# Problemas de credenciales de una sucursal: se informan como aviso, sin traceback
+CREDENTIAL_ERRORS = (InvalidCredentialsError, SecretNotFoundError)
+
 
 class FudoAuthenticator:
     def __init__(self, db_manager: DBManager, auth_endpoint: str, project_id: str):
@@ -44,6 +53,8 @@ class FudoAuthenticator:
         try:
             logger.info(f"Realizando POST a {self.auth_endpoint} para obtener nuevo token...")
             response = self.session.post(self.auth_endpoint, headers=headers, data=payload, timeout=(5, 15))
+            if response.status_code in (401, 403):
+                raise InvalidCredentialsError(f"Fudo rechazó el apiKey/apiSecret (HTTP {response.status_code}).")
             response.raise_for_status() # Lanza un error para códigos de respuesta 4xx/5xx
             response_json = response.json()
             logger.info("Nuevo token obtenido de Fudo API Auth.")
@@ -99,6 +110,8 @@ class FudoAuthenticator:
                 # Actualizar/insertar en la base de datos a través del metadata_manager
                 self.metadata_manager.update_fudo_token_data(id_sucursal, access_token, token_expiration_utc)
                 logger.info(f"Nuevo token obtenido y guardado para sucursal {id_sucursal}. Expira: {token_expiration_utc}")
+            except CREDENTIAL_ERRORS:
+                raise  # Lo informa quien llama, como aviso de [CREDENCIALES]
             except Exception as e:
                 logger.error(f"Fallo al obtener o guardar nuevo token para sucursal {id_sucursal}: {e}", exc_info=True)
                 raise

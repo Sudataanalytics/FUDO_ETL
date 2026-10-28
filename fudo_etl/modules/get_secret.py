@@ -2,8 +2,14 @@
 import os
 import logging
 from google.cloud import secretmanager # <--- ¡DESCOMENTAR ESTA LÍNEA!
+from google.api_core.exceptions import NotFound
 
 logger = logging.getLogger(__name__)
+
+
+class SecretNotFoundError(ConnectionError):
+    """El secret pedido no existe (o no tiene versiones) en Secret Manager."""
+
 
 def get_secret(secret_name: str, project_id: str = None) -> str:
     """
@@ -28,6 +34,9 @@ def get_secret(secret_name: str, project_id: str = None) -> str:
             response = client.access_secret_version(name=name)
             logger.info(f"Secret '{secret_name}' obtenido de Google Secret Manager.")
             return response.payload.data.decode("UTF-8")
+        except NotFound:
+            # Falta cargar el secret: es un problema de configuración, no una falla del ETL (sin traceback)
+            raise SecretNotFoundError(f"El secret '{secret_name}' no existe en Secret Manager o no tiene versiones.") from None
         except Exception as e:
             logger.error(f"Failed to access secret '{secret_name}' from Secret Manager: {e}", exc_info=True)
             raise ConnectionError(f"Failed to access secret '{secret_name}' from Secret Manager.")
