@@ -48,6 +48,7 @@ Variables opcionales (con sus valores por defecto):
 - ETL_BRANCH_WORKERS=3, ETL_ENTITY_WORKERS=2
 - DB_POOL_SIZE=ETL_BRANCH_WORKERS x ETL_ENTITY_WORKERS + 1, DB_POOL_PING_AFTER_IDLE_SECONDS=60
 - DB_STATEMENT_TIMEOUT_MS=900000, DB_LOCK_TIMEOUT_MS=30000, DB_IDLE_IN_TX_TIMEOUT_MS=300000
+- DB_SWAP_STATEMENT_TIMEOUT_MS=2700000 (timeout del reemplazo staging -> RAW de un Full Refresh, solo en esa transacción)
 - DB_MAX_RETRIES=4, DB_RETRY_BASE_DELAY_SECONDS=2
 - API_ENTITY_DEADLINE_SECONDS=1800 (tiempo máximo para extraer una entidad de una sucursal)
 - API_INTER_PAGE_DELAY_SECONDS=0.15 (pausa entre páginas de la API de Fudo)
