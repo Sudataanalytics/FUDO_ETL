@@ -19,10 +19,13 @@ from modules.etl_metadata_manager import ETLMetadataManager
 from modules.fudo_auth import BranchTokenProvider, FudoAuthenticator
 from modules.fudo_api_client import FudoApiClient
 
+# Versión del ETL. Aparece en cada línea de log para identificar qué build corre en GCP.
+ETL_VERSION = "V2.0"
+
 # Configuración básica de logging para todo el script principal.
 # threadName identifica sucursal/hilo, ya que las entidades se extraen en paralelo.
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(threadName)s - %(name)s - %(levelname)s - %(message)s')
+                    format=f'##{ETL_VERSION}## %(asctime)s - %(threadName)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 ENTITIES_TO_EXTRACT = [
@@ -137,22 +140,40 @@ def get_worker_counts() -> tuple[int, int]:
     return branch_workers, entity_workers
 
 
-def extract_branch(db_manager: DBManager, authenticator: FudoAuthenticator,
-                   metadata_manager: ETLMetadataManager, api_base_url: str,
-                   branch_data: tuple, run_started_at: datetime, entity_workers: int) -> list[str]:
+def authenticate_branches(authenticator: FudoAuthenticator,
+                          branches_config: list[tuple]) -> tuple[list[tuple], list[str]]:
     """
-    Extrae todas las entidades de una sucursal, varias a la vez.
+    Obtiene el token de cada sucursal antes de extraer.
+    Devuelve (sucursales disponibles como (branch_data, token_provider), ids de las omitidas).
+    Una sucursal sin credenciales válidas no frena al resto ni cuenta como error del ETL:
+    se informa en el log con el prefijo [CREDENCIALES] para poder filtrarla o alertar sobre ella.
+    """
+    available, skipped = [], []
+    for branch_data in branches_config:
+        id_sucursal, _, branch_name, api_key_secret_name, api_secret_secret_name = branch_data
+        try:
+            token_provider = BranchTokenProvider(authenticator, id_sucursal, api_key_secret_name, api_secret_secret_name)
+            available.append((branch_data, token_provider))
+        except Exception as e:
+            logger.error(f"[CREDENCIALES] Sucursal '{branch_name}' ({id_sucursal}) omitida: {e}")
+            skipped.append(id_sucursal)
+
+    logger.info(f"[CREDENCIALES] {len(available)}/{len(branches_config)} sucursales con credenciales válidas.")
+    if skipped:
+        logger.warning(f"[CREDENCIALES] Sucursales omitidas en esta corrida: {', '.join(skipped)}")
+    return available, skipped
+
+
+def extract_branch(db_manager: DBManager, metadata_manager: ETLMetadataManager, api_base_url: str,
+                   branch_data: tuple, token_provider: BranchTokenProvider,
+                   run_started_at: datetime, entity_workers: int) -> list[str]:
+    """
+    Extrae todas las entidades de una sucursal ya autenticada, varias a la vez.
     Cada entidad usa su propio FudoApiClient (requests.Session no se comparte entre hilos),
     todas con el mismo token de la sucursal. Nunca lanza: devuelve la lista de fallos.
     """
-    id_sucursal, _, branch_name, api_key_secret_name, api_secret_secret_name = branch_data
+    id_sucursal, _, branch_name, _, _ = branch_data
     logger.info(f"--- Procesando Sucursal: '{branch_name}' ({id_sucursal}) ---")
-
-    try:
-        token_provider = BranchTokenProvider(authenticator, id_sucursal, api_key_secret_name, api_secret_secret_name)
-    except Exception as e:
-        logger.error(f"Fallo de autenticación en sucursal '{branch_name}': {e}")
-        return [f"{id_sucursal}/auth"]
 
     def run_entity(entity: str):
         api_client = FudoApiClient(api_base_url)
@@ -237,7 +258,9 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
                      raw_views_configs: list[tuple[str, str]]) -> list[str]:
     """
     Ejecuta la extracción y carga de todas las sucursales activas y luego la transformación.
-    Un fallo en una sucursal/entidad no frena el resto (sus datos previos quedan intactos),
+    Primero valida las credenciales: las sucursales sin credenciales válidas se omiten y solo
+    quedan en el log (no cuentan como error, salvo que no quede ninguna disponible).
+    Un fallo en una entidad no frena el resto (sus datos previos quedan intactos),
     pero se registra y se devuelve para que el proceso termine con error.
     """
     logger.info("==================================================")
@@ -270,15 +293,20 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
         if entity in full_refresh_entities:
             db_manager.ensure_staging_table(raw_table_for(entity))
 
+    available_branches, _ = authenticate_branches(authenticator, branches_config)
+    if not available_branches:
+        logger.error("[CREDENCIALES] Ninguna sucursal tiene credenciales válidas. No se extrae nada.")
+        return ["sin_sucursales_con_credenciales"]
+
     branch_workers, entity_workers = get_worker_counts()
-    logger.info(f"Extrayendo {len(branches_config)} sucursales "
+    logger.info(f"Extrayendo {len(available_branches)} sucursales "
                 f"({branch_workers} sucursales x {entity_workers} entidades en paralelo).")
 
     with ThreadPoolExecutor(max_workers=branch_workers, thread_name_prefix="sucursal") as executor:
         futures = [
-            executor.submit(extract_branch, db_manager, authenticator, metadata_manager, api_base_url,
-                            branch_data, run_started_at, entity_workers)
-            for branch_data in branches_config
+            executor.submit(extract_branch, db_manager, metadata_manager, api_base_url,
+                            branch_data, token_provider, run_started_at, entity_workers)
+            for branch_data, token_provider in available_branches
         ]
         for future in as_completed(futures):
             failures.extend(future.result())

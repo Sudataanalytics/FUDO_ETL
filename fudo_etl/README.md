@@ -40,7 +40,8 @@ Funcionamiento de la carga:
 - La API se lee página por página y cada página se carga apenas llega (la memoria no crece con la historia del cliente).
 - Entidades full refresh: se cargan en una tabla staging (stg_fudo_raw_*) y luego se reemplazan los datos de la sucursal en una sola transacción. Si algo falla, la tabla RAW queda como estaba.
 - Las MVs se crean solo si no existen y luego se refrescan con REFRESH MATERIALIZED VIEW CONCURRENTLY. Si se cambia la definición de una MV, correr el job una vez con REBUILD_MVS=true.
-- Si falla cualquier sucursal/entidad/MV, el proceso termina con exit code 1 (el job queda como fallido en Cloud Run).
+- Antes de extraer se validan las credenciales de cada sucursal. Las que fallan (secreto inaccesible o 401 de Fudo) se omiten y no cuentan como error: quedan en el log con el prefijo [CREDENCIALES] (buscar ese texto en Cloud Logging para ver cuáles se saltearon). Si ninguna sucursal tiene credenciales válidas, el proceso termina con exit code 1.
+- Si falla cualquier entidad/MV, el proceso termina con exit code 1 (el job queda como fallido en Cloud Run).
 - La extracción corre en paralelo: ETL_BRANCH_WORKERS sucursales a la vez y, dentro de cada una, ETL_ENTITY_WORKERS entidades a la vez (cada hilo lee de la API y carga sus páginas). Los requests simultáneos a Fudo son el producto de ambos; si aparecen muchos 429, bajarlos.
 - La base se accede con un pool de conexiones (por defecto una por hilo + 1). Una conexión caída se descarta y se abre otra; las ociosas por más de DB_POOL_PING_AFTER_IDLE_SECONDS se validan antes de usarse.
 Variables opcionales (con sus valores por defecto):

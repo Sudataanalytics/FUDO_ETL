@@ -50,8 +50,8 @@ ON CONFLICT (id_sucursal) DO UPDATE
 SET access_token = EXCLUDED.access_token, token_expiration_utc = EXCLUDED.token_expiration_utc;
 ```
 
-Si el token vence (o le quedan menos de 10 minutos), el ETL intenta pedir uno nuevo. Sin API keys en `.env`
-esa sucursal falla con error de autenticación en vez de emitir un token nuevo: es intencional.
+Si el token vence (o le quedan menos de `FUDO_TOKEN_MIN_VALIDITY_MINUTES`, 60 por defecto), el ETL intenta pedir uno nuevo.
+Sin API keys en `.env` esa sucursal se omite (log `[CREDENCIALES]`) en vez de emitir un token nuevo: es intencional.
 Si una corrida larga supera la vigencia del token, aparecerán errores 401 al final.
 
 **B. API keys en `.env`** (`FUDO_<CLIENTE>_<SUCURSAL>_APIKEY/APISECRET`). Pide un token nuevo con las mismas
