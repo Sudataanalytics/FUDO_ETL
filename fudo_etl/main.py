@@ -123,8 +123,9 @@ def extract_and_load_entity(db_manager: DBManager, api_client: FudoApiClient,
         return 0
 
     if is_full_refresh:
-        db_manager.swap_branch_from_staging(raw_table_name, target_table, id_sucursal)
-        logger.info(f"    [AUDIT] '{entity}' reemplazado para la sucursal: {total_loaded} registros.")
+        deleted, inserted = db_manager.swap_branch_from_staging(raw_table_name, target_table, id_sucursal)
+        logger.info(f"    [AUDIT] '{entity}' reemplazado para la sucursal: {total_loaded} registros "
+                    f"({deleted} borrados, {inserted} insertados).")
     else:
         logger.info(f"    [AUDIT] '{entity}' incremental: {total_loaded} registros.")
 
