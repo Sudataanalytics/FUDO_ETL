@@ -9,7 +9,7 @@ Componentes Clave:
 Core Genérico (fudo_etl/): Código Python único que maneja la conexión a la API de Fudo y la persistencia en PostgreSQL.
 Capa de Clientes (clients/): Archivos SQL y Python específicos que definen las sucursales y el modelo analítico de cada cliente.
 Estrategia de Carga:
-Full Refresh: Para asegurar la integridad (especialmente en estados de ventas e ítems), se realiza un truncado y carga completa de las tablas RAW principales en cada ejecución.
+Full Refresh: Para asegurar la integridad (especialmente en estados de ventas e ítems), se descargan completas de Fudo las entidades principales en cada ejecución, pero en las tablas RAW solo se escriben las filas nuevas, cambiadas o eliminadas.
 Claves Sintéticas: Los IDs se gestionan como ID_FUDO-ID_SUCURSAL (tipo TEXT) para evitar colisiones entre sucursales.
 Infraestructura: Google Cloud Platform (Proyecto: dashestandar).
 📁 Estructura del Proyecto
@@ -38,7 +38,7 @@ Entorno Virtual: python -m venv venv -> .\venv\Scripts\activate
 Dependencias: pip install -r fudo_etl/requirements.txt
 Funcionamiento de la carga:
 - La API se lee página por página y cada página se carga apenas llega (la memoria no crece con la historia del cliente).
-- Entidades full refresh: se cargan en una tabla staging (stg_fudo_raw_*) y luego se reemplazan los datos de la sucursal en una sola transacción. Si algo falla, la tabla RAW queda como estaba.
+- Entidades full refresh: se cargan en una tabla staging (stg_fudo_raw_*) y luego se reemplazan los datos de la sucursal en una sola transacción. El reemplazo es diferencial por payload_checksum: se borran solo las filas que ya no existen o cambiaron y se insertan solo las nuevas o cambiadas (el [AUDIT] informa cuántas). Si algo falla, la tabla RAW queda como estaba.
 - Las MVs se crean solo si no existen y luego se refrescan con REFRESH MATERIALIZED VIEW CONCURRENTLY. Si se cambia la definición de una MV, correr el job una vez con REBUILD_MVS=true.
 - Antes de extraer se validan las credenciales de cada sucursal. Las que fallan (secreto inaccesible o 401 de Fudo) se omiten y no cuentan como error: quedan en el log con el prefijo [CREDENCIALES] (buscar ese texto en Cloud Logging para ver cuáles se saltearon). Si ninguna sucursal tiene credenciales válidas, el proceso termina con exit code 1.
 - Si falla cualquier entidad/MV, el proceso termina con exit code 1 (el job queda como fallido en Cloud Run).

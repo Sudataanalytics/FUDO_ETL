@@ -262,18 +262,37 @@ class DBManager:
         )
         return staging_table
 
-    def swap_branch_from_staging(self, raw_table_name: str, staging_table: str, id_sucursal: str):
+    @_retry_on_operational_error
+    def swap_branch_from_staging(self, raw_table_name: str, staging_table: str, id_sucursal: str) -> tuple[int, int]:
         """
         Reemplaza los datos de UNA sucursal en la tabla RAW con los de staging, en una sola transacción.
+        Es diferencial: solo borra las filas que ya no vienen de Fudo o cambiaron de checksum, e inserta
+        las nuevas o cambiadas. Las filas iguales no se tocan (reescribirlas todas cada día saturaba la base).
         Si algo falla, la tabla RAW queda exactamente como estaba (sin ventana de datos vacíos).
+        Devuelve (filas borradas, filas insertadas) en RAW.
         """
         cols = ', '.join(RAW_COLUMNS)
-        self.execute_in_transaction([
+
+        def _do(cursor):
             # SET LOCAL: el timeout más largo vale solo para esta transacción, la conexión vuelve al pool con el normal
-            (f"SET LOCAL statement_timeout = {int(self.swap_statement_timeout_ms)};", None),
-            (f"DELETE FROM public.{raw_table_name} WHERE id_sucursal_fuente = %s;", (id_sucursal,)),
-            (f"INSERT INTO public.{raw_table_name} ({cols}) "
-             f"SELECT {cols} FROM public.{staging_table} WHERE id_sucursal_fuente = %s "
-             f"ON CONFLICT (id_fudo, id_sucursal_fuente, payload_checksum) DO NOTHING;", (id_sucursal,)),
-            (f"DELETE FROM public.{staging_table} WHERE id_sucursal_fuente = %s;", (id_sucursal,)),
-        ])
+            cursor.execute(f"SET LOCAL statement_timeout = {int(self.swap_statement_timeout_ms)};")
+            cursor.execute(
+                f"DELETE FROM public.{raw_table_name} r WHERE r.id_sucursal_fuente = %s "
+                f"AND NOT EXISTS (SELECT 1 FROM public.{staging_table} s "
+                f"WHERE s.id_fudo = r.id_fudo AND s.id_sucursal_fuente = r.id_sucursal_fuente "
+                f"AND s.payload_checksum = r.payload_checksum);",
+                (id_sucursal,),
+            )
+            deleted = cursor.rowcount
+            # Las filas que no cambiaron chocan con la PK (incluye el checksum) y se saltean
+            cursor.execute(
+                f"INSERT INTO public.{raw_table_name} ({cols}) "
+                f"SELECT {cols} FROM public.{staging_table} WHERE id_sucursal_fuente = %s "
+                f"ON CONFLICT (id_fudo, id_sucursal_fuente, payload_checksum) DO NOTHING;",
+                (id_sucursal,),
+            )
+            inserted = cursor.rowcount
+            cursor.execute(f"DELETE FROM public.{staging_table} WHERE id_sucursal_fuente = %s;", (id_sucursal,))
+            return deleted, inserted
+
+        return self._run(_do)
