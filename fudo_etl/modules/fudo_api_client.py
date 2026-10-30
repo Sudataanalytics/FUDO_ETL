@@ -14,6 +14,10 @@ class EntityDeadlineExceeded(TimeoutError):
     """La extracción de una entidad superó su tiempo máximo permitido."""
 
 
+class EntityForbiddenError(PermissionError):
+    """Fudo respondió 403: el usuario API de la sucursal no tiene permiso sobre la entidad."""
+
+
 class FudoApiClient:
     def __init__(self, api_base_url: str):
         self.api_base_url = api_base_url
@@ -130,6 +134,9 @@ class FudoApiClient:
                 logger.warning(f"401 en {entity_name} (página {current_page}). Renovando token y reintentando.")
                 self.set_auth_token(self.token_refresher())
                 response = self.session.get(request_url, params=current_params, timeout=self.request_timeout)
+            if response.status_code == 403:
+                # Falta de permisos del rol en Fudo, no un fallo del ETL: lo informa quien llama como aviso
+                raise EntityForbiddenError(f"403 Forbidden en '{entity_name}' (página {current_page}): {response.text[:200]}")
             if not response.ok:
                 logger.error(f"Error {response.status_code} en {entity_name} (página {current_page}): {response.text[:500]}")
                 response.raise_for_status()

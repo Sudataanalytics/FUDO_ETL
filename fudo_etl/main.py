@@ -17,7 +17,7 @@ from modules.config import load_config
 from modules.db_manager import DBManager
 from modules.etl_metadata_manager import ETLMetadataManager
 from modules.fudo_auth import BranchTokenProvider, FudoAuthenticator, CREDENTIAL_ERRORS
-from modules.fudo_api_client import FudoApiClient
+from modules.fudo_api_client import FudoApiClient, EntityForbiddenError
 
 # Versión del ETL. Aparece en cada línea de log para identificar qué build corre en GCP.
 ETL_VERSION = "V2.0"
@@ -176,6 +176,7 @@ def extract_branch(db_manager: DBManager, metadata_manager: ETLMetadataManager, 
     Extrae todas las entidades de una sucursal ya autenticada, varias a la vez.
     Cada entidad usa su propio FudoApiClient (requests.Session no se comparte entre hilos),
     todas con el mismo token de la sucursal. Nunca lanza: devuelve la lista de fallos.
+    Una entidad sin permiso en Fudo (403) se omite con aviso [PERMISOS] y no cuenta como fallo.
     """
     id_sucursal, _, branch_name, _, _ = branch_data
     logger.info(f"--- Procesando Sucursal: '{branch_name}' ({id_sucursal}) ---")
@@ -189,18 +190,23 @@ def extract_branch(db_manager: DBManager, metadata_manager: ETLMetadataManager, 
         finally:
             api_client.close()
 
-    failures = []
+    failures, forbidden = [], []
     with ThreadPoolExecutor(max_workers=entity_workers, thread_name_prefix=f"{id_sucursal}") as executor:
         futures = {executor.submit(run_entity, entity): entity for entity in ENTITIES_TO_EXTRACT}
         for future in as_completed(futures):
             entity = futures[future]
             try:
                 future.result()
+            except EntityForbiddenError as e:
+                logger.warning(f"[PERMISOS] Entidad '{entity}' (sucursal '{branch_name}') omitida: {e}")
+                forbidden.append(entity)
             except Exception as e:
                 logger.error(f"  Error en entidad '{entity}' (sucursal '{branch_name}'): {e}", exc_info=True)
                 failures.append(f"{id_sucursal}/{entity}")
 
-    logger.info(f"--- Sucursal '{branch_name}' finalizada ({len(failures)} fallos) ---")
+    if forbidden:
+        logger.warning(f"[PERMISOS] Sucursal '{branch_name}' ({id_sucursal}) sin permiso en Fudo para: {', '.join(forbidden)}")
+    logger.info(f"--- Sucursal '{branch_name}' finalizada ({len(failures)} fallos, {len(forbidden)} sin permiso) ---")
     return failures
 
 
