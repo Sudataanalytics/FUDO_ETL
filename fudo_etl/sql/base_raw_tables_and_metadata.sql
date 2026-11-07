@@ -179,6 +179,13 @@ BEGIN
         SELECT tablename FROM pg_tables
         WHERE schemaname = 'public'
           AND (tablename LIKE 'fudo\_raw\_%' OR tablename LIKE 'stg\_fudo\_raw\_%')
+          -- Solo tablas que tengan la columna: una fudo_raw_* creada fuera de este script
+          -- sin id_sucursal_fuente haría fallar el CREATE INDEX y abortaría todo el despliegue.
+          AND EXISTS (
+              SELECT 1 FROM information_schema.columns c
+              WHERE c.table_schema = 'public' AND c.table_name = pg_tables.tablename
+                AND c.column_name = 'id_sucursal_fuente'
+          )
           -- Una staging creada con LIKE ya trae el índice copiado (con otro nombre): no duplicarlo
           AND NOT EXISTS (
               SELECT 1 FROM pg_indexes i
