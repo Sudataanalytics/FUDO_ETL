@@ -9,7 +9,8 @@ Componentes Clave:
 Core Genérico (fudo_etl/): Código Python único que maneja la conexión a la API de Fudo y la persistencia en PostgreSQL.
 Capa de Clientes (clients/): Archivos SQL y Python específicos que definen las sucursales y el modelo analítico de cada cliente.
 Estrategia de Carga:
-Full Refresh: Para asegurar la integridad (especialmente en estados de ventas e ítems), se descargan completas de Fudo las entidades principales en cada ejecución, pero en las tablas RAW solo se escriben las filas nuevas, cambiadas o eliminadas.
+Ventana móvil: sales, items, payments y expenses solo se descargan desde (último checkpoint − INCREMENTAL_WINDOW_DAYS, 60 por defecto) según su createdAt, y solo esa porción de RAW se reconcilia. Los cambios en registros creados antes de la ventana solo se capturan corriendo el job con FORCE_FULL_REFRESH=true.
+Full Refresh: los catálogos (productos, categorías, medios de pago, proveedores, etc.) se descargan completos en cada ejecución, pero en las tablas RAW solo se escriben las filas nuevas, cambiadas o eliminadas.
 Claves Sintéticas: Los IDs se gestionan como ID_FUDO-ID_SUCURSAL (tipo TEXT) para evitar colisiones entre sucursales.
 Infraestructura: Google Cloud Platform (Proyecto: dashestandar).
 📁 Estructura del Proyecto
@@ -38,7 +39,10 @@ Entorno Virtual: python -m venv venv -> .\venv\Scripts\activate
 Dependencias: pip install -r fudo_etl/requirements.txt
 Funcionamiento de la carga:
 - La API se lee página por página y cada página se carga apenas llega (la memoria no crece con la historia del cliente).
-- Entidades full refresh: se cargan en una tabla staging (stg_fudo_raw_*) y luego se reemplazan los datos de la sucursal en una sola transacción. El reemplazo es diferencial por payload_checksum: se borran solo las filas que ya no existen o cambiaron y se insertan solo las nuevas o cambiadas (el [AUDIT] informa cuántas). Si algo falla, la tabla RAW queda como estaba.
+- Todas las entidades se cargan en una tabla staging (stg_fudo_raw_*) y luego se reemplazan los datos de la sucursal en una sola transacción. El reemplazo es diferencial por payload_checksum: se borran solo las filas que ya no existen o cambiaron y se insertan solo las nuevas o cambiadas (el [AUDIT] informa cuántas y si fue "full refresh" o "ventana desde <fecha>"). Si algo falla, la tabla RAW queda como estaba.
+- Ventana móvil (sales, items, payments, expenses): el inicio de la ventana es el último checkpoint de la entidad (etl_fudo_extraction_status) menos INCREMENTAL_WINDOW_DAYS; si el job estuvo caído, la ventana se estira sola. sales/payments/expenses usan filter[createdAt]=gte.<inicio>; items no tiene filtro en la API, así que se pide ordenado por -createdAt y se corta la paginación al pasar el inicio. El reemplazo solo toca las filas con last_updated_at_fudo (= createdAt) >= inicio; lo anterior queda intacto. Sin checkpoint previo, la entidad hace full refresh.
+- Limitación de la ventana: la API de Fudo no expone fecha de modificación, así que una venta anulada, un gasto pagado o un registro borrado con createdAt anterior a la ventana NO se actualiza solo. Para reconciliar todo, ejecutar el job una vez con FORCE_FULL_REFRESH=true, por ejemplo:
+  gcloud run jobs execute d-002-miguitas --region=southamerica-east1 --update-env-vars=FORCE_FULL_REFRESH=true
 - Las MVs se crean solo si no existen y luego se refrescan con REFRESH MATERIALIZED VIEW CONCURRENTLY. Si se cambia la definición de una MV, correr el job una vez con REBUILD_MVS=true.
 - Antes de extraer se validan las credenciales de cada sucursal. Las que fallan (secreto inaccesible o 401 de Fudo) se omiten y no cuentan como error: quedan en el log con el prefijo [CREDENCIALES] (buscar ese texto en Cloud Logging para ver cuáles se saltearon). Si ninguna sucursal tiene credenciales válidas, el proceso termina con exit code 1.
 - Si falla cualquier entidad/MV, el proceso termina con exit code 1 (el job queda como fallido en Cloud Run).
@@ -55,6 +59,8 @@ Variables opcionales (con sus valores por defecto):
 - FUDO_MAX_RETRY_AFTER_SECONDS=300 (tope de espera cuando Fudo responde con Retry-After; Fudo limita por ventanas de ~5 min, compartidas entre sucursales)
 - FUDO_TOKEN_MIN_VALIDITY_MINUTES=60 (vigencia mínima para reusar un token guardado; ante un 401 se renueva solo)
 - REBUILD_MVS=false
+- INCREMENTAL_WINDOW_DAYS=60 (días de la ventana móvil; 0 la desactiva y todo vuelve a ser full refresh)
+- FORCE_FULL_REFRESH=false (true: descarga todo en esa corrida, para reconciliar cambios anteriores a la ventana)
 2. Automatización en GCP
 Cada git push a la rama main dispara Cloud Build, el cual:
 Construye la imagen Docker genérica.

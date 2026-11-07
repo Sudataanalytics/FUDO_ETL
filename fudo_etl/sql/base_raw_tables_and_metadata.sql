@@ -191,4 +191,20 @@ BEGIN
             'idx_' || t.tablename || '_sucursal', t.tablename
         );
     END LOOP;
-END $$;
+END $$;
+-- ----------------------------------------------------------------------
+-- 4. ÍNDICES PARA LA VENTANA MÓVIL (RAW)
+-- ----------------------------------------------------------------------
+-- En las entidades con ventana móvil el swap solo borra filas de la sucursal con
+-- last_updated_at_fudo (= createdAt de Fudo) >= inicio de la ventana. Sin este índice
+-- ese DELETE recorre todas las filas de la sucursal.
+-- Las staging creadas después con LIKE ... INCLUDING ALL lo heredan; no lo necesitan, pero no molesta.
+
+CREATE INDEX IF NOT EXISTS idx_fudo_raw_sales_sucursal_created
+    ON public.fudo_raw_sales (id_sucursal_fuente, last_updated_at_fudo);
+CREATE INDEX IF NOT EXISTS idx_fudo_raw_items_sucursal_created
+    ON public.fudo_raw_items (id_sucursal_fuente, last_updated_at_fudo);
+CREATE INDEX IF NOT EXISTS idx_fudo_raw_payments_sucursal_created
+    ON public.fudo_raw_payments (id_sucursal_fuente, last_updated_at_fudo);
+CREATE INDEX IF NOT EXISTS idx_fudo_raw_expenses_sucursal_created
+    ON public.fudo_raw_expenses (id_sucursal_fuente, last_updated_at_fudo);

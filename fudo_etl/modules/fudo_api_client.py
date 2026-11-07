@@ -9,6 +9,43 @@ from .http_retry import build_retry_session
 
 logger = logging.getLogger(__name__)
 
+# Campo de Fudo que delimita la ventana móvil. Se guarda en RAW como last_updated_at_fudo.
+WINDOW_FIELD = 'createdAt'
+
+# Entidades con ventana móvil: solo se descargan los registros creados desde el inicio de la ventana
+# y solo se reconcilia esa porción de RAW. Según el spec de Fudo (openapi v1alpha1):
+#   'filter'    -> el endpoint acepta filter[createdAt]=gte.<fecha>
+#   'sort_desc' -> no tiene filtro, pero admite sort=-createdAt: se pagina de lo más nuevo a lo más
+#                  viejo y se corta al pasar el inicio de la ventana
+WINDOWED_ENTITIES = {
+    'sales': 'filter',
+    'payments': 'filter',
+    'expenses': 'filter',
+    'items': 'sort_desc',
+}
+
+
+def parse_fudo_date(date_str: str | None) -> datetime | None:
+    """Parsea una fecha de Fudo (ISO 8601 con 'Z') a datetime UTC. Devuelve None si falta o no se puede parsear."""
+    if date_str is None:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+    except ValueError:
+        logger.warning(f"No se pudo parsear la fecha de Fudo: '{date_str}'. Retornando None.")
+        return None
+
+
+def format_fudo_date(ts: datetime) -> str:
+    """Formatea un datetime como lo aceptan los filtros de Fudo: UTC, sin fracción de segundo y con 'Z'."""
+    return ts.astimezone(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def _created_before(record: dict, ts: datetime) -> bool:
+    """True si el registro fue creado antes de ts. Sin fecha válida se considera dentro de la ventana."""
+    created_at = parse_fudo_date(record.get('attributes', {}).get(WINDOW_FIELD))
+    return created_at is not None and created_at < ts
+
 
 class EntityDeadlineExceeded(TimeoutError):
     """La extracción de una entidad superó su tiempo máximo permitido."""
@@ -51,18 +88,18 @@ class FudoApiClient:
             'provider': 'name,email,address,phone,comment,active,internal,providerHouseAccountBalance,fiscalNumber',
         }
 
-        # --- Entidades que siempre se descargan completas (Para evitar errores 400 de filtro) ---
+        # --- Entidades que siempre se descargan completas ---
+        # Son catálogos chicos o entidades sin filtro por fecha en la API: bajarlas enteras es la
+        # única forma de detectar cambios. Nunca se les manda un filter[...] (Fudo responde 400).
         self.entities_for_full_refresh = [
-            'sales', 'payments', 'payment-methods', 'product-categories',
+            'payment-methods', 'product-categories',
             'product-modifiers', 'products', 'customers', 'discounts',
-            'ingredients', 'items', 'kitchens', 'roles', 'rooms',
+            'ingredients', 'kitchens', 'roles', 'rooms',
             'tables', 'users', 'providers', 'expense-categories'
         ]
 
-        # --- Entidades con filtro incremental ---
-        self.incremental_filter_entities = {
-            'sales': 'createdAt',
-        }
+        # --- Entidades con ventana móvil por createdAt (ver WINDOWED_ENTITIES) ---
+        self.windowed_entities = WINDOWED_ENTITIES
 
     def set_auth_token(self, token: str):
         self.auth_token = token
@@ -72,47 +109,53 @@ class FudoApiClient:
     def close(self):
         self.session.close()
 
-    def iter_pages(self, entity_name: str, id_sucursal: str, last_extracted_ts: datetime = None) -> Iterator[list[dict]]:
+    def iter_pages(self, entity_name: str, id_sucursal: str, window_start: datetime | None = None) -> Iterator[list[dict]]:
         """
         Extrae datos de la API de Fudo y devuelve un generador de páginas (listas de registros).
         Así nunca se mantiene en memoria más de una página por vez.
-        Si la entidad está en 'entities_for_full_refresh', ignora el timestamp y trae todo.
+        - window_start None: trae la entidad completa (full refresh).
+        - window_start informado (solo entidades de 'windowed_entities'): trae únicamente los
+          registros con createdAt >= window_start.
         """
         if not self.auth_token:
             raise ValueError("Token de autenticación no establecido.")
 
-        is_full_refresh = entity_name in self.entities_for_full_refresh
-        apply_filter = (not is_full_refresh and last_extracted_ts is not None)
+        window_mode = self.windowed_entities.get(entity_name) if window_start else None
+        params = {}
+        stop_before = None
 
-        if is_full_refresh:
-            logger.info(f"--- ESTRATEGIA FULL REFRESH: {entity_name} ---")
+        if window_mode == 'filter':
+            params[f'filter[{WINDOW_FIELD}]'] = f"gte.{format_fudo_date(window_start)}"
+        elif window_mode == 'sort_desc':
+            params['sort'] = f"-{WINDOW_FIELD}"
+            stop_before = window_start
+
+        if window_mode:
+            logger.info(f"--- ESTRATEGIA VENTANA ({window_mode}) desde {format_fudo_date(window_start)}: {entity_name} ---")
         else:
-            logger.info(f"--- ESTRATEGIA INCREMENTAL: {entity_name} ---")
+            logger.info(f"--- ESTRATEGIA FULL REFRESH: {entity_name} ---")
 
+        # Filtro de campos (Solo si está definido en el mapeo)
         fields_key = self.fields_key_mapping.get(entity_name)
+        fields_params = self.fields_parameters.get(fields_key or '')
+        if fields_key and fields_params:
+            params[f'fields[{fields_key}]'] = fields_params
+
         return self._iter_paginated_data_generic(
             request_url=f"{self.api_base_url}/v1alpha1/{entity_name}",
             entity_name=entity_name,
-            apply_incremental_filter=apply_filter,
-            incremental_filter_ts=last_extracted_ts,
-            fields_key=fields_key,
-            fields_params=self.fields_parameters.get(fields_key or ''),
+            params=params,
+            stop_before=stop_before,
         )
 
-    def _iter_paginated_data_generic(self, request_url, entity_name, apply_incremental_filter,
-                                     incremental_filter_ts=None, fields_key=None, fields_params=None,
+    def _iter_paginated_data_generic(self, request_url, entity_name, params: dict,
+                                     stop_before: datetime | None = None,
                                      start_page=1, max_pages=-1) -> Iterator[list[dict]]:
-        params = {}
-
-        # Filtro de fecha
-        if apply_incremental_filter and incremental_filter_ts:
-            filter_field = self.incremental_filter_entities.get(entity_name, 'createdAt')
-            formatted_ts = incremental_filter_ts.astimezone(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
-            params[f'filter[{filter_field}]'] = f"gte.{formatted_ts}"
-
-        # Filtro de campos (Solo si está definido en el mapeo)
-        if fields_key and fields_params:
-            params[f'fields[{fields_key}]'] = fields_params
+        """
+        Pagina el endpoint hasta la última página.
+        stop_before: solo para endpoints ordenados por createdAt descendente. Descarta los registros
+        creados antes de esa fecha y corta la paginación en la primera página que los contiene.
+        """
 
         deadline = time.monotonic() + self.entity_deadline_seconds
         current_page = start_page
@@ -142,8 +185,19 @@ class FudoApiClient:
                 response.raise_for_status()
 
             data = response.json().get('data', [])
-            if data:
-                yield data
+            reached_window_start = False
+            if stop_before is not None and data:
+                in_window = [record for record in data if not _created_before(record, stop_before)]
+                reached_window_start = len(in_window) < len(data)
+                data_to_yield = in_window
+            else:
+                data_to_yield = data
+
+            if data_to_yield:
+                yield data_to_yield
+            if reached_window_start:
+                logger.info(f"    '{entity_name}': se alcanzó el inicio de la ventana en la página {current_page}.")
+                return
             if not data or len(data) < self.page_size:
                 return
 
