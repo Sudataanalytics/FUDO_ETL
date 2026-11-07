@@ -4,6 +4,7 @@ import time
 import logging
 import threading
 from contextlib import contextmanager
+from datetime import datetime
 from functools import wraps
 
 import psycopg2
@@ -263,25 +264,31 @@ class DBManager:
         return staging_table
 
     @_retry_on_operational_error
-    def swap_branch_from_staging(self, raw_table_name: str, staging_table: str, id_sucursal: str) -> tuple[int, int]:
+    def swap_branch_from_staging(self, raw_table_name: str, staging_table: str, id_sucursal: str,
+                                 window_start: datetime | None = None) -> tuple[int, int]:
         """
         Reemplaza los datos de UNA sucursal en la tabla RAW con los de staging, en una sola transacción.
         Es diferencial: solo borra las filas que ya no vienen de Fudo o cambiaron de checksum, e inserta
         las nuevas o cambiadas. Las filas iguales no se tocan (reescribirlas todas cada día saturaba la base).
+        Con window_start, solo se reconcilian las filas creadas desde esa fecha (last_updated_at_fudo
+        guarda el createdAt de Fudo): staging trae solo la ventana, así que lo anterior no se toca.
         Si algo falla, la tabla RAW queda exactamente como estaba (sin ventana de datos vacíos).
         Devuelve (filas borradas, filas insertadas) en RAW.
         """
         cols = ', '.join(RAW_COLUMNS)
+        window_clause = "AND r.last_updated_at_fudo >= %s " if window_start is not None else ""
+        delete_params = (id_sucursal, window_start) if window_start is not None else (id_sucursal,)
 
         def _do(cursor):
             # SET LOCAL: el timeout más largo vale solo para esta transacción, la conexión vuelve al pool con el normal
             cursor.execute(f"SET LOCAL statement_timeout = {int(self.swap_statement_timeout_ms)};")
             cursor.execute(
                 f"DELETE FROM public.{raw_table_name} r WHERE r.id_sucursal_fuente = %s "
+                f"{window_clause}"
                 f"AND NOT EXISTS (SELECT 1 FROM public.{staging_table} s "
                 f"WHERE s.id_fudo = r.id_fudo AND s.id_sucursal_fuente = r.id_sucursal_fuente "
                 f"AND s.payload_checksum = r.payload_checksum);",
-                (id_sucursal,),
+                delete_params,
             )
             deleted = cursor.rowcount
             # Las filas que no cambiaron chocan con la PK (incluye el checksum) y se saltean

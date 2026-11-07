@@ -1,7 +1,7 @@
 # fudo_etl/main.py
 import logging
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 import re
 from hashlib import md5
@@ -17,7 +17,8 @@ from modules.config import load_config
 from modules.db_manager import DBManager
 from modules.etl_metadata_manager import ETLMetadataManager
 from modules.fudo_auth import BranchTokenProvider, FudoAuthenticator, CREDENTIAL_ERRORS
-from modules.fudo_api_client import FudoApiClient, EntityForbiddenError
+from modules.fudo_api_client import (FudoApiClient, EntityForbiddenError, WINDOW_FIELD, WINDOWED_ENTITIES,
+                                     format_fudo_date, parse_fudo_date)
 
 # Versión del ETL. Aparece en cada línea de log para identificar qué build corre en GCP.
 ETL_VERSION = "V2.0"
@@ -37,20 +38,6 @@ ENTITIES_TO_EXTRACT = [
 
 # Elimina el DROP de las definiciones de MVs para no recrearlas en cada corrida
 DROP_MV_PATTERN = re.compile(r"DROP\s+MATERIALIZED\s+VIEW[^;]*;", re.IGNORECASE)
-
-# Función auxiliar para parsear fechas de la API
-def parse_fudo_date(date_str: str | None) -> datetime | None:
-    """
-    Parsea una cadena de fecha de Fudo (ISO 8601 con 'Z') a un objeto datetime UTC.
-    Maneja None y errores de formato.
-    """
-    if date_str is None:
-        return None
-    try:
-        return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-    except ValueError:
-        logger.warning(f"No se pudo parsear la fecha de Fudo: '{date_str}'. Retornando None.")
-        return None
 
 def raw_table_for(entity: str) -> str:
     return f"fudo_raw_{entity.replace('-', '_')}"
@@ -83,51 +70,77 @@ def prepare_records(page: list[dict], id_sucursal: str) -> list[dict]:
                 'id_sucursal_fuente': id_sucursal,
                 'fecha_extraccion_utc': extracted_at,
                 'payload_json': payload_str,
-                'last_updated_at_fudo': parse_fudo_date(record.get('attributes', {}).get('createdAt')),
+                # Guarda el createdAt de Fudo: es la columna que delimita la ventana móvil en el swap
+                'last_updated_at_fudo': parse_fudo_date(record.get('attributes', {}).get(WINDOW_FIELD)),
                 'payload_checksum': checksum
             }
     return list(prepared.values())
+
+
+def get_window_config() -> tuple[int, bool]:
+    """
+    (días de la ventana móvil, forzar full refresh).
+    INCREMENTAL_WINDOW_DAYS=0 desactiva la ventana. FORCE_FULL_REFRESH=true descarga todo en esta
+    corrida: es la única forma de capturar cambios en registros creados antes de la ventana.
+    """
+    window_days = max(0, int(os.getenv("INCREMENTAL_WINDOW_DAYS", "60")))
+    force_full_refresh = os.getenv("FORCE_FULL_REFRESH", "false").lower() == "true"
+    return window_days, force_full_refresh
+
+
+def resolve_window_start(metadata_manager: ETLMetadataManager, api_client: FudoApiClient,
+                         id_sucursal: str, entity: str) -> datetime | None:
+    """
+    Inicio de la ventana móvil para la entidad, o None si corresponde full refresh.
+    Se cuenta desde el último checkpoint (no desde ahora): si el job estuvo caído, la ventana se estira.
+    Se trunca a segundos porque el filtro de Fudo no acepta fracciones; el mismo valor se usa en la
+    API, en el corte de páginas y en el swap, así lo descargado y lo reconciliado coinciden.
+    """
+    window_days, force_full_refresh = get_window_config()
+    if force_full_refresh or window_days == 0 or entity not in api_client.windowed_entities:
+        return None
+    last_ts = metadata_manager.get_last_extraction_timestamp(id_sucursal, entity)
+    if last_ts is None:
+        # Primera corrida de la entidad en la sucursal: carga completa
+        return None
+    return (last_ts - timedelta(days=window_days)).astimezone(timezone.utc).replace(microsecond=0)
 
 
 def extract_and_load_entity(db_manager: DBManager, api_client: FudoApiClient,
                             metadata_manager: ETLMetadataManager, id_sucursal: str,
                             entity: str, run_started_at: datetime) -> int:
     """
-    Extrae una entidad de una sucursal página por página y carga cada lote apenas llega.
-    - Full refresh: carga en staging y reemplaza los datos de la sucursal en UNA transacción.
-    - Incremental: inserta directo (idempotente por PK) y solo avanza el checkpoint al final.
+    Extrae una entidad de una sucursal página por página y la carga en staging apenas llega cada página.
+    Al final reconcilia staging contra RAW en UNA transacción:
+    - Full refresh: todos los datos de la sucursal.
+    - Ventana móvil: solo los registros creados desde el inicio de la ventana; lo anterior no se toca.
     Devuelve la cantidad de registros cargados.
     """
     raw_table_name = raw_table_for(entity)
-    is_full_refresh = entity in api_client.entities_for_full_refresh
+    staging_table = db_manager.ensure_staging_table(raw_table_name)
+    # Limpia restos de una corrida anterior que haya fallado a mitad de camino
+    db_manager.execute_query(
+        f"DELETE FROM public.{staging_table} WHERE id_sucursal_fuente = %s;", (id_sucursal,)
+    )
 
-    target_table = raw_table_name
-    if is_full_refresh:
-        target_table = db_manager.ensure_staging_table(raw_table_name)
-        # Limpia restos de una corrida anterior que haya fallado a mitad de camino
-        db_manager.execute_query(
-            f"DELETE FROM public.{target_table} WHERE id_sucursal_fuente = %s;", (id_sucursal,)
-        )
-
-    last_ts = metadata_manager.get_last_extraction_timestamp(id_sucursal, entity)
+    window_start = resolve_window_start(metadata_manager, api_client, id_sucursal, entity)
     total_loaded = 0
-    for page_number, page in enumerate(api_client.iter_pages(entity, id_sucursal, last_ts), start=1):
+    for page_number, page in enumerate(api_client.iter_pages(entity, id_sucursal, window_start), start=1):
         records = prepare_records(page, id_sucursal)
-        db_manager.insert_raw_data(target_table, records)
+        db_manager.insert_raw_data(staging_table, records)
         total_loaded += len(records)
         if page_number % 20 == 0:
             logger.info(f"    '{entity}': {total_loaded} registros cargados hasta la página {page_number}...")
 
     if total_loaded == 0:
+        # No se reconcilia con staging vacío: una respuesta vacía de la API no debe borrar datos de RAW
         logger.info(f"    No hay datos nuevos para '{entity}'.")
         return 0
 
-    if is_full_refresh:
-        deleted, inserted = db_manager.swap_branch_from_staging(raw_table_name, target_table, id_sucursal)
-        logger.info(f"    [AUDIT] '{entity}' reemplazado para la sucursal: {total_loaded} registros "
-                    f"({deleted} borrados, {inserted} insertados).")
-    else:
-        logger.info(f"    [AUDIT] '{entity}' incremental: {total_loaded} registros.")
+    deleted, inserted = db_manager.swap_branch_from_staging(raw_table_name, staging_table, id_sucursal, window_start)
+    scope = f"ventana desde {format_fudo_date(window_start)}" if window_start else "full refresh"
+    logger.info(f"    [AUDIT] '{entity}' reemplazado para la sucursal ({scope}): {total_loaded} registros "
+                f"({deleted} borrados, {inserted} insertados).")
 
     # Se guarda el inicio de la corrida (no el final) para no perder registros creados durante la extracción
     metadata_manager.update_last_extraction_timestamp(id_sucursal, entity, run_started_at)
@@ -297,12 +310,17 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
 
     # Las tablas staging se crean antes de lanzar los hilos: dos CREATE TABLE IF NOT EXISTS
     # simultáneos sobre la misma tabla pueden fallar en Postgres.
-    probe_client = FudoApiClient(api_base_url)
-    full_refresh_entities = probe_client.entities_for_full_refresh
-    probe_client.close()
     for entity in ENTITIES_TO_EXTRACT:
-        if entity in full_refresh_entities:
-            db_manager.ensure_staging_table(raw_table_for(entity))
+        db_manager.ensure_staging_table(raw_table_for(entity))
+
+    window_days, force_full_refresh = get_window_config()
+    if force_full_refresh:
+        logger.info("[VENTANA] FORCE_FULL_REFRESH=true: todas las entidades se descargan completas en esta corrida.")
+    elif window_days == 0:
+        logger.info("[VENTANA] INCREMENTAL_WINDOW_DAYS=0: ventana móvil desactivada, todo es full refresh.")
+    else:
+        logger.info(f"[VENTANA] Ventana móvil de {window_days} días (desde el último checkpoint) para: "
+                    f"{', '.join(WINDOWED_ENTITIES)}.")
 
     available_branches, _ = authenticate_branches(authenticator, branches_config)
     if not available_branches:
