@@ -111,8 +111,12 @@ materialized_views_configs = [
             (s.payload_json -> 'attributes' ->> 'saleType') AS sale_type,
             (s.payload_json -> 'attributes' ->> 'saleState') AS sale_state,
             (s.payload_json -> 'attributes' ->> 'total')::FLOAT AS amount_total,
-            (s.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE AS date_order,
-            (s.payload_json -> 'attributes' ->> 'closedAt')::TIMESTAMP WITH TIME ZONE AS closed_at,
+            -- Fechas en hora de Argentina (timestamp sin zona): Power BI recibe los timestamptz en UTC
+            -- y las ventas después de las 21 h caían en el día siguiente.
+            ((s.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE
+                AT TIME ZONE 'America/Argentina/Buenos_Aires') AS date_order,
+            ((s.payload_json -> 'attributes' ->> 'closedAt')::TIMESTAMP WITH TIME ZONE
+                AT TIME ZONE 'America/Argentina/Buenos_Aires') AS closed_at,
             (s.payload_json -> 'attributes' ->> 'people')::FLOAT::INTEGER AS people,
             cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_sales s
@@ -140,7 +144,9 @@ materialized_views_configs = [
                  ELSE 'OTHER' END AS transaction_type,
             CASE WHEN (p.payload_json -> 'relationships' -> 'expense' -> 'data' ->> 'id') IS NOT NULL THEN -((p.payload_json -> 'attributes' ->> 'amount')::FLOAT)
                  ELSE (p.payload_json -> 'attributes' ->> 'amount')::FLOAT END AS signed_amount,
-            (p.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE AS payment_date,
+            -- Hora de Argentina (timestamp sin zona), igual que mv_sales_orders.date_order
+            ((p.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE
+                AT TIME ZONE 'America/Argentina/Buenos_Aires') AS payment_date,
             cb.id_branch_nro AS id_branch_nro
         FROM public.fudo_raw_payments p
         JOIN public.config_fudo_branches cb ON p.id_sucursal_fuente = cb.id_branch
@@ -180,12 +186,28 @@ materialized_views_configs = [
 
                 (e.payload_json -> 'attributes' ->> 'amount')::FLOAT AS amount,
                 (e.payload_json -> 'attributes' ->> 'description') AS description,
-                (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE AS expense_date,
+                -- Fechas en hora de Argentina (timestamp sin zona), igual que mv_sales_orders.
+                -- date, dueDate y paymentDate pueden venir solo como fecha ('2026-09-16'): esas se toman tal cual,
+                -- porque convertirlas las movería al día anterior a las 21 h.
+                CASE WHEN length(e.payload_json -> 'attributes' ->> 'date') > 10
+                     THEN (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP WITH TIME ZONE
+                          AT TIME ZONE 'America/Argentina/Buenos_Aires'
+                     ELSE (e.payload_json -> 'attributes' ->> 'date')::TIMESTAMP
+                END AS expense_date,
                 (e.payload_json -> 'attributes' ->> 'status') AS status,
-                (e.payload_json -> 'attributes' ->> 'dueDate')::TIMESTAMP WITH TIME ZONE AS due_date,
+                CASE WHEN length(e.payload_json -> 'attributes' ->> 'dueDate') > 10
+                     THEN (e.payload_json -> 'attributes' ->> 'dueDate')::TIMESTAMP WITH TIME ZONE
+                          AT TIME ZONE 'America/Argentina/Buenos_Aires'
+                     ELSE (e.payload_json -> 'attributes' ->> 'dueDate')::TIMESTAMP
+                END AS due_date,
                 (e.payload_json -> 'attributes' ->> 'canceled')::BOOLEAN AS canceled,
-                (e.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE AS created_at,
-                (e.payload_json -> 'attributes' ->> 'paymentDate')::TIMESTAMP WITH TIME ZONE AS payment_date,
+                ((e.payload_json -> 'attributes' ->> 'createdAt')::TIMESTAMP WITH TIME ZONE
+                    AT TIME ZONE 'America/Argentina/Buenos_Aires') AS created_at,
+                CASE WHEN length(e.payload_json -> 'attributes' ->> 'paymentDate') > 10
+                     THEN (e.payload_json -> 'attributes' ->> 'paymentDate')::TIMESTAMP WITH TIME ZONE
+                          AT TIME ZONE 'America/Argentina/Buenos_Aires'
+                     ELSE (e.payload_json -> 'attributes' ->> 'paymentDate')::TIMESTAMP
+                END AS payment_date,
                 (e.payload_json -> 'attributes' ->> 'receiptNumber') AS receipt_number,
                 (e.payload_json -> 'attributes' ->> 'useInCashCount')::BOOLEAN AS use_in_cash_count,
 
