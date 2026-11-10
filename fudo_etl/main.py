@@ -6,6 +6,7 @@ import uuid
 import re
 from hashlib import md5
 import os
+from typing import Callable
 import sys         # Importar sys para manejar sys.path
 import importlib   # Importar importlib para la importación dinámica
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,7 +19,7 @@ from modules.db_manager import DBManager
 from modules.etl_metadata_manager import ETLMetadataManager
 from modules.fudo_auth import BranchTokenProvider, FudoAuthenticator, CREDENTIAL_ERRORS
 from modules.fudo_api_client import (FudoApiClient, EntityForbiddenError, WINDOW_FIELD, WINDOWED_ENTITIES,
-                                     format_fudo_date, parse_fudo_date)
+                                     INCLUDED_CHILDREN, format_fudo_date, parse_fudo_date)
 
 # Versión del ETL. Aparece en cada línea de log para identificar qué build corre en GCP.
 ETL_VERSION = "V2.0"
@@ -43,6 +44,12 @@ def raw_table_for(entity: str) -> str:
     return f"fudo_raw_{entity.replace('-', '_')}"
 
 
+def child_entity_for(entity: str) -> str | None:
+    """Entidad hija que llega incluida en la respuesta de 'entity' (ej. 'subitems' de 'items'), o None."""
+    child = INCLUDED_CHILDREN.get(entity)
+    return child['include'] if child else None
+
+
 # Nueva función para leer el contenido de un archivo SQL
 def read_sql_file(relative_path: str) -> str:
     """Lee un archivo SQL desde la raíz del proyecto."""
@@ -53,8 +60,13 @@ def read_sql_file(relative_path: str) -> str:
         return f.read()
 
 
-def prepare_records(page: list[dict], id_sucursal: str) -> list[dict]:
-    """Convierte una página de la API en registros RAW, deduplicando dentro de la página."""
+def prepare_records(page: list[dict], id_sucursal: str,
+                    window_ts: Callable[[dict], datetime | None] | None = None) -> list[dict]:
+    """
+    Convierte una página de la API en registros RAW, deduplicando dentro de la página.
+    window_ts: si se informa, da el valor de last_updated_at_fudo (columna que corta la ventana
+    móvil en el swap) en lugar del createdAt del propio registro.
+    """
     extracted_at = datetime.now(timezone.utc)
     prepared = {}
     for record in page:
@@ -71,7 +83,8 @@ def prepare_records(page: list[dict], id_sucursal: str) -> list[dict]:
                 'fecha_extraccion_utc': extracted_at,
                 'payload_json': payload_str,
                 # Guarda el createdAt de Fudo: es la columna que delimita la ventana móvil en el swap
-                'last_updated_at_fudo': parse_fudo_date(record.get('attributes', {}).get(WINDOW_FIELD)),
+                'last_updated_at_fudo': (window_ts(record) if window_ts
+                                         else parse_fudo_date(record.get('attributes', {}).get(WINDOW_FIELD))),
                 'payload_checksum': checksum
             }
     return list(prepared.values())
@@ -103,6 +116,12 @@ def resolve_window_start(metadata_manager: ETLMetadataManager, api_client: FudoA
     if last_ts is None:
         # Primera corrida de la entidad en la sucursal: carga completa
         return None
+    child_entity = child_entity_for(entity)
+    if child_entity and metadata_manager.get_last_extraction_timestamp(id_sucursal, child_entity) is None:
+        # La entidad hija nunca se cargó (ej. subitems recién agregados): una carga completa del padre
+        # trae también el histórico de los hijos. Pasa una sola vez por sucursal.
+        logger.info(f"    '{entity}': sin checkpoint de '{child_entity}', se descarga completo para cargar su histórico.")
+        return None
     return (last_ts - timedelta(days=window_days)).astimezone(timezone.utc).replace(microsecond=0)
 
 
@@ -114,21 +133,40 @@ def extract_and_load_entity(db_manager: DBManager, api_client: FudoApiClient,
     Al final reconcilia staging contra RAW en UNA transacción:
     - Full refresh: todos los datos de la sucursal.
     - Ventana móvil: solo los registros creados desde el inicio de la ventana; lo anterior no se toca.
+    Si la entidad trae hijos incluidos (ej. subitems de items), se cargan y reconcilian en su propia
+    tabla RAW con la misma ventana.
     Devuelve la cantidad de registros cargados.
     """
     raw_table_name = raw_table_for(entity)
     staging_table = db_manager.ensure_staging_table(raw_table_name)
+    child_entity = child_entity_for(entity)
+    child_raw_table = raw_table_for(child_entity) if child_entity else None
+    child_staging_table = db_manager.ensure_staging_table(child_raw_table) if child_entity else None
     # Limpia restos de una corrida anterior que haya fallado a mitad de camino
-    db_manager.execute_query(
-        f"DELETE FROM public.{staging_table} WHERE id_sucursal_fuente = %s;", (id_sucursal,)
-    )
+    for table in filter(None, (staging_table, child_staging_table)):
+        db_manager.execute_query(
+            f"DELETE FROM public.{table} WHERE id_sucursal_fuente = %s;", (id_sucursal,)
+        )
 
     window_start = resolve_window_start(metadata_manager, api_client, id_sucursal, entity)
     total_loaded = 0
-    for page_number, page in enumerate(api_client.iter_pages(entity, id_sucursal, window_start), start=1):
+    child_loaded = 0
+    pages = api_client.iter_pages(entity, id_sucursal, window_start)
+    for page_number, (page, children) in enumerate(pages, start=1):
         records = prepare_records(page, id_sucursal)
         db_manager.insert_raw_data(staging_table, records)
         total_loaded += len(records)
+        if children:
+            # El hijo toma el createdAt del padre como corte de ventana: así el swap con ventana
+            # reconcilia exactamente los hijos de los padres descargados, aunque el hijo sea más nuevo.
+            parent_created = {r['id_fudo']: r['last_updated_at_fudo'] for r in records}
+            parent_rel = INCLUDED_CHILDREN[entity]['parent_relationship']
+            child_records = prepare_records(
+                children, id_sucursal,
+                window_ts=lambda c: parent_created.get(c['relationships'][parent_rel]['data']['id']),
+            )
+            db_manager.insert_raw_data(child_staging_table, child_records)
+            child_loaded += len(child_records)
         if page_number % 20 == 0:
             logger.info(f"    '{entity}': {total_loaded} registros cargados hasta la página {page_number}...")
 
@@ -137,13 +175,24 @@ def extract_and_load_entity(db_manager: DBManager, api_client: FudoApiClient,
         logger.info(f"    No hay datos nuevos para '{entity}'.")
         return 0
 
-    deleted, inserted = db_manager.swap_branch_from_staging(raw_table_name, staging_table, id_sucursal, window_start)
     scope = f"ventana desde {format_fudo_date(window_start)}" if window_start else "full refresh"
+    deleted, inserted = db_manager.swap_branch_from_staging(raw_table_name, staging_table, id_sucursal, window_start)
     logger.info(f"    [AUDIT] '{entity}' reemplazado para la sucursal ({scope}): {total_loaded} registros "
                 f"({deleted} borrados, {inserted} insertados).")
 
+    if child_entity:
+        # Se reconcilia aunque no haya hijos: con padres descargados, "ningún hijo" es una respuesta válida
+        # y así se borran los que ya no existen en Fudo.
+        deleted, inserted = db_manager.swap_branch_from_staging(
+            child_raw_table, child_staging_table, id_sucursal, window_start
+        )
+        logger.info(f"    [AUDIT] '{child_entity}' reemplazado para la sucursal ({scope}): {child_loaded} registros "
+                    f"({deleted} borrados, {inserted} insertados).")
+
     # Se guarda el inicio de la corrida (no el final) para no perder registros creados durante la extracción
     metadata_manager.update_last_extraction_timestamp(id_sucursal, entity, run_started_at)
+    if child_entity:
+        metadata_manager.update_last_extraction_timestamp(id_sucursal, child_entity, run_started_at)
     return total_loaded
 
 
@@ -312,6 +361,8 @@ def run_fudo_raw_etl(db_manager: DBManager, client_name: str,
     # simultáneos sobre la misma tabla pueden fallar en Postgres.
     for entity in ENTITIES_TO_EXTRACT:
         db_manager.ensure_staging_table(raw_table_for(entity))
+        if child_entity_for(entity):
+            db_manager.ensure_staging_table(raw_table_for(child_entity_for(entity)))
 
     window_days, force_full_refresh = get_window_config()
     if force_full_refresh:

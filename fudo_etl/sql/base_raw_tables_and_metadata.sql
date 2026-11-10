@@ -158,8 +158,17 @@ CREATE TABLE IF NOT EXISTS public.fudo_raw_users (
 );
 
 CREATE TABLE IF NOT EXISTS public.fudo_raw_providers (
-    id_fudo TEXT NOT NULL, id_sucursal_fuente VARCHAR(255) NOT NULL, 
-    fecha_extraccion_utc TIMESTAMP WITH TIME ZONE NOT NULL, payload_json JSONB NOT NULL, 
+    id_fudo TEXT NOT NULL, id_sucursal_fuente VARCHAR(255) NOT NULL,
+    fecha_extraccion_utc TIMESTAMP WITH TIME ZONE NOT NULL, payload_json JSONB NOT NULL,
+    last_updated_at_fudo TIMESTAMP WITH TIME ZONE, payload_checksum TEXT NOT NULL,
+    PRIMARY KEY (id_fudo, id_sucursal_fuente, payload_checksum)
+);
+
+-- Subitems (modificadores de un item). No tienen endpoint propio: llegan con /items?include=subitems.
+-- last_updated_at_fudo guarda el createdAt del ITEM PADRE, para que la ventana móvil corte igual que items.
+CREATE TABLE IF NOT EXISTS public.fudo_raw_subitems (
+    id_fudo TEXT NOT NULL, id_sucursal_fuente VARCHAR(255) NOT NULL,
+    fecha_extraccion_utc TIMESTAMP WITH TIME ZONE NOT NULL, payload_json JSONB NOT NULL,
     last_updated_at_fudo TIMESTAMP WITH TIME ZONE, payload_checksum TEXT NOT NULL,
     PRIMARY KEY (id_fudo, id_sucursal_fuente, payload_checksum)
 );
@@ -211,6 +220,8 @@ CREATE INDEX IF NOT EXISTS idx_fudo_raw_sales_sucursal_created
     ON public.fudo_raw_sales (id_sucursal_fuente, last_updated_at_fudo);
 CREATE INDEX IF NOT EXISTS idx_fudo_raw_items_sucursal_created
     ON public.fudo_raw_items (id_sucursal_fuente, last_updated_at_fudo);
+CREATE INDEX IF NOT EXISTS idx_fudo_raw_subitems_sucursal_created
+    ON public.fudo_raw_subitems (id_sucursal_fuente, last_updated_at_fudo);
 CREATE INDEX IF NOT EXISTS idx_fudo_raw_payments_sucursal_created
     ON public.fudo_raw_payments (id_sucursal_fuente, last_updated_at_fudo);
 CREATE INDEX IF NOT EXISTS idx_fudo_raw_expenses_sucursal_created
