@@ -24,6 +24,13 @@ WINDOWED_ENTITIES = {
     'items': 'sort_desc',
 }
 
+# Registros hijos que no tienen endpoint propio y solo llegan con include=... en la entidad padre.
+# Los subitems son los modificadores de un item (ej. "Empanadas calientes por unidad" + 12 "Emp. Carne"):
+# /v1alpha1/subitems responde 404, pero /items?include=subitems los trae en 'included'.
+INCLUDED_CHILDREN = {
+    'items': {'include': 'subitems', 'type': 'Subitem', 'parent_relationship': 'item'},
+}
+
 
 def parse_fudo_date(date_str: str | None) -> datetime | None:
     """Parsea una fecha de Fudo (ISO 8601 con 'Z') a datetime UTC. Devuelve None si falta o no se puede parsear."""
@@ -109,13 +116,15 @@ class FudoApiClient:
     def close(self):
         self.session.close()
 
-    def iter_pages(self, entity_name: str, id_sucursal: str, window_start: datetime | None = None) -> Iterator[list[dict]]:
+    def iter_pages(self, entity_name: str, id_sucursal: str,
+                   window_start: datetime | None = None) -> Iterator[tuple[list[dict], list[dict]]]:
         """
-        Extrae datos de la API de Fudo y devuelve un generador de páginas (listas de registros).
+        Extrae datos de la API de Fudo y devuelve un generador de páginas (registros, hijos incluidos).
         Así nunca se mantiene en memoria más de una página por vez.
         - window_start None: trae la entidad completa (full refresh).
         - window_start informado (solo entidades de 'windowed_entities'): trae únicamente los
           registros con createdAt >= window_start.
+        - Hijos: solo para entidades de INCLUDED_CHILDREN (ej. subitems de items); vacío para el resto.
         """
         if not self.auth_token:
             raise ValueError("Token de autenticación no establecido.")
@@ -141,20 +150,27 @@ class FudoApiClient:
         if fields_key and fields_params:
             params[f'fields[{fields_key}]'] = fields_params
 
+        child = INCLUDED_CHILDREN.get(entity_name)
+        if child:
+            params['include'] = child['include']
+
         return self._iter_paginated_data_generic(
             request_url=f"{self.api_base_url}/v1alpha1/{entity_name}",
             entity_name=entity_name,
             params=params,
             stop_before=stop_before,
+            child=child,
         )
 
     def _iter_paginated_data_generic(self, request_url, entity_name, params: dict,
-                                     stop_before: datetime | None = None,
-                                     start_page=1, max_pages=-1) -> Iterator[list[dict]]:
+                                     stop_before: datetime | None = None, child: dict | None = None,
+                                     start_page=1, max_pages=-1) -> Iterator[tuple[list[dict], list[dict]]]:
         """
-        Pagina el endpoint hasta la última página.
+        Pagina el endpoint hasta la última página. Devuelve (registros, hijos) por página.
         stop_before: solo para endpoints ordenados por createdAt descendente. Descarta los registros
         creados antes de esa fecha y corta la paginación en la primera página que los contiene.
+        child: entrada de INCLUDED_CHILDREN. Se devuelven los 'included' de ese tipo cuyo padre
+        quedó entre los registros devueltos (los de padres descartados por stop_before no van).
         """
 
         deadline = time.monotonic() + self.entity_deadline_seconds
@@ -184,7 +200,8 @@ class FudoApiClient:
                 logger.error(f"Error {response.status_code} en {entity_name} (página {current_page}): {response.text[:500]}")
                 response.raise_for_status()
 
-            data = response.json().get('data', [])
+            body = response.json()
+            data = body.get('data', [])
             reached_window_start = False
             if stop_before is not None and data:
                 in_window = [record for record in data if not _created_before(record, stop_before)]
@@ -193,8 +210,18 @@ class FudoApiClient:
             else:
                 data_to_yield = data
 
+            children = []
+            if child and data_to_yield:
+                parent_ids = {record.get('id') for record in data_to_yield}
+                rel = child['parent_relationship']
+                children = [
+                    inc for inc in body.get('included') or []
+                    if inc.get('type') == child['type']
+                    and ((inc.get('relationships', {}).get(rel) or {}).get('data') or {}).get('id') in parent_ids
+                ]
+
             if data_to_yield:
-                yield data_to_yield
+                yield data_to_yield, children
             if reached_window_start:
                 logger.info(f"    '{entity_name}': se alcanzó el inicio de la ventana en la página {current_page}.")
                 return

@@ -253,24 +253,77 @@ materialized_views_configs = [
     """),
 
     # ------------------ 9. SALES ORDER LINES ------------------
+    # Una fila por item (line_type PRODUCT) y una por subitem/modificador (line_type MODIFIER),
+    # igual que la vista "Productos + modificadores" de Fudo. Ej.: "Empanadas calientes por unidad"
+    # ($0) es el PRODUCT y las "Emp. Carne" que lleva son MODIFIER, con su cantidad y su precio.
+    # Se excluyen los items cancelados (canceled = true) y los modificadores de esos items, como Fudo.
+    # OJO: en items y subitems, el 'price' de Fudo es el TOTAL de la línea, no el unitario
+    # (septiembre/Italia: suma de price de "Emp. Carne" = $187.200 = lo que muestra Fudo para 104 u).
+    # price_unit conserva ese valor crudo por compatibilidad con Power BI, que lo suma como monto de
+    # la línea; amount_total_line es el mismo total (antes era price * qty y lo inflaba).
     ('mv_sales_order_lines', """
         DROP MATERIALIZED VIEW IF EXISTS public.mv_sales_order_lines CASCADE;
         CREATE MATERIALIZED VIEW public.mv_sales_order_lines AS
-        SELECT DISTINCT ON (i.id_fudo, i.id_sucursal_fuente)
-            -- KEYS CORREGIDAS: ID-NUMERO
-            (i.payload_json ->> 'id') || '-' || cb.id_branch_nro::TEXT AS order_line_key,
-            (i.payload_json -> 'relationships' -> 'sale' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS order_key_fk,
-            (i.payload_json -> 'relationships' -> 'product' -> 'data' ->> 'id') || '-' || cb.id_branch_nro::TEXT AS product_key_fk,
-            
-            (i.payload_json -> 'attributes' ->> 'price')::FLOAT AS price_unit, 
-            COALESCE(((i.payload_json -> 'attributes' ->> 'quantity')::FLOAT::INTEGER), 0) AS qty,
-            ((i.payload_json -> 'attributes' ->> 'price')::FLOAT * (i.payload_json -> 'attributes' ->> 'quantity')::FLOAT)::FLOAT AS amount_total_line,
-            cb.id_branch_nro AS id_branch_nro
-        FROM public.fudo_raw_items i
-        JOIN public.config_fudo_branches cb ON i.id_sucursal_fuente = cb.id_branch
-        WHERE i.payload_json ->> 'id' IS NOT NULL 
-          AND COALESCE(((i.payload_json -> 'attributes' ->> 'quantity')::FLOAT), 0) > 0
-        ORDER BY i.id_fudo, i.id_sucursal_fuente, i.fecha_extraccion_utc DESC;
+        WITH items AS (
+            SELECT DISTINCT ON (i.id_fudo, i.id_sucursal_fuente)
+                i.id_fudo, i.payload_json, cb.id_branch_nro
+            FROM public.fudo_raw_items i
+            JOIN public.config_fudo_branches cb ON i.id_sucursal_fuente = cb.id_branch
+            WHERE i.payload_json ->> 'id' IS NOT NULL
+            ORDER BY i.id_fudo, i.id_sucursal_fuente, i.fecha_extraccion_utc DESC
+        ),
+        active_items AS (
+            SELECT
+                id_fudo, id_branch_nro, payload_json,
+                -- KEYS: ID-NUMERO
+                (payload_json ->> 'id') || '-' || id_branch_nro::TEXT AS order_line_key,
+                (payload_json -> 'relationships' -> 'sale' -> 'data' ->> 'id') || '-' || id_branch_nro::TEXT AS order_key_fk,
+                (payload_json -> 'relationships' -> 'product' -> 'data' ->> 'id') || '-' || id_branch_nro::TEXT AS product_key_fk
+            FROM items
+            WHERE (payload_json -> 'attributes' ->> 'canceled') IS DISTINCT FROM 'true'
+        ),
+        subitems AS (
+            SELECT DISTINCT ON (s.id_fudo, s.id_sucursal_fuente)
+                s.id_fudo, s.payload_json, cb.id_branch_nro
+            FROM public.fudo_raw_subitems s
+            JOIN public.config_fudo_branches cb ON s.id_sucursal_fuente = cb.id_branch
+            WHERE s.payload_json ->> 'id' IS NOT NULL
+            ORDER BY s.id_fudo, s.id_sucursal_fuente, s.fecha_extraccion_utc DESC
+        )
+        SELECT
+            ai.order_line_key,
+            ai.order_key_fk,
+            ai.product_key_fk,
+            (ai.payload_json -> 'attributes' ->> 'price')::FLOAT AS price_unit,
+            COALESCE(((ai.payload_json -> 'attributes' ->> 'quantity')::FLOAT::INTEGER), 0) AS qty,
+            (ai.payload_json -> 'attributes' ->> 'price')::FLOAT AS amount_total_line,
+            ai.id_branch_nro,
+            'PRODUCT'::VARCHAR(10) AS line_type,
+            NULL::TEXT AS parent_order_line_key,
+            NULL::TEXT AS parent_product_key_fk
+        FROM active_items ai
+        WHERE COALESCE(((ai.payload_json -> 'attributes' ->> 'quantity')::FLOAT), 0) > 0
+
+        UNION ALL
+
+        SELECT
+            -- Prefijo 'S': los ids de subitems y de items son secuencias distintas y pueden repetirse
+            'S' || (si.payload_json ->> 'id') || '-' || si.id_branch_nro::TEXT AS order_line_key,
+            ai.order_key_fk,
+            (si.payload_json -> 'relationships' -> 'product' -> 'data' ->> 'id') || '-' || si.id_branch_nro::TEXT AS product_key_fk,
+            -- price es el total de la línea (12 x $1.800 = $21.600), igual que en items
+            (si.payload_json -> 'attributes' ->> 'price')::FLOAT AS price_unit,
+            COALESCE(((si.payload_json -> 'attributes' ->> 'quantity')::FLOAT::INTEGER), 0) AS qty,
+            (si.payload_json -> 'attributes' ->> 'price')::FLOAT AS amount_total_line,
+            si.id_branch_nro,
+            'MODIFIER'::VARCHAR(10) AS line_type,
+            ai.order_line_key AS parent_order_line_key,
+            ai.product_key_fk AS parent_product_key_fk
+        FROM subitems si
+        JOIN active_items ai
+          ON ai.id_fudo = si.payload_json -> 'relationships' -> 'item' -> 'data' ->> 'id'
+         AND ai.id_branch_nro = si.id_branch_nro
+        WHERE COALESCE(((si.payload_json -> 'attributes' ->> 'quantity')::FLOAT), 0) > 0;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_sales_order_line_key ON public.mv_sales_order_lines (order_line_key);
     """),
 
@@ -376,6 +429,19 @@ raw_views_configs = [
             (i.payload_json -> 'relationships' -> 'product' -> 'data' ->> 'id') AS product_id,
             i.payload_json AS original_payload
         FROM public.fudo_raw_items i;
+    """),
+    ('fudo_view_raw_subitems', """
+        DROP VIEW IF EXISTS public.fudo_view_raw_subitems CASCADE;
+        CREATE OR REPLACE VIEW public.fudo_view_raw_subitems AS
+        SELECT
+            s.id_fudo, s.id_sucursal_fuente, s.fecha_extraccion_utc, s.payload_checksum,
+            (s.payload_json ->> 'id') AS subitem_id,
+            (s.payload_json -> 'relationships' -> 'item' -> 'data' ->> 'id') AS item_id,
+            (s.payload_json -> 'relationships' -> 'product' -> 'data' ->> 'id') AS product_id,
+            (s.payload_json -> 'attributes' ->> 'quantity')::FLOAT AS quantity,
+            (s.payload_json -> 'attributes' ->> 'price')::FLOAT AS price,
+            s.payload_json AS original_payload
+        FROM public.fudo_raw_subitems s;
     """),
     ('fudo_view_raw_kitchens', """
         DROP VIEW IF EXISTS public.fudo_view_raw_kitchens CASCADE;
